@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PATTI CROP ── 動画クロップ＆再生できる形式に変換（無料・Windows）</title>
+<meta name="description" content="動画の上下左右をドラッグでクロップ＋Windows・iPhoneで再生できるMP4に変換できる無料ツール。完全ローカル動作で、動画はネットに送信されません。">
+<meta name="theme-color" content="#1a1a24">
+
+<!-- SNSシェア時のプレビュー（OGP / Twitterカード） -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="PATTI CREATIVE PRODUCT">
+<meta property="og:title" content="PATTI CROP ── 動画クロップ＆再生できる形式に変換（無料・Windows）">
+<meta property="og:description" content="動画の上下左右をドラッグでクロップ＋Windows・iPhoneで再生できるMP4に変換。完全ローカル動作、無料。">
+<meta property="og:url" content="https://ikemotodir.github.io/patti-crop/">
+<meta property="og:image" content="https://ikemotodir.github.io/patti-crop/assets/patti_logo.png">
+<meta property="og:locale" content="ja_JP">
+<meta name="twitter:card" content="summary">
+
+<!-- Google Analytics (GA4) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-C9RFZES8ZS"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-C9RFZES8ZS');
+</script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700;900&display=swap" rel="stylesheet">
+<link rel="icon" type="image/png" href="assets/patti_logo.png">
+
+<style>
+  :root {
+    --pink: #D6336C;
+    --yellow: #FFC400;
+    --bg: #1a1a24;
+    --card: #232331;
+    --border: #2c2c3a;
+    --text: #ffffff;
+    --text-sub: #cccccc;
+    --text-dim: #bbbbbb;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Zen Maru Gothic', sans-serif;
+    font-weight: 500;
+    line-height: 1.8;
+  }
+  a { color: inherit; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 0 20px; }
+
+  header { text-align: center; padding: 56px 20px 40px; }
+  header img.logo { width: 88px; height: auto; margin-bottom: 14px; }
+  header h1 {
+    font-weight: 900;
+    font-size: clamp(1.8rem, 5vw, 2.8rem);
+    letter-spacing: .04em;
+  }
+  header h1 .accent { color: var(--pink); }
+  header .tagline {
+    margin-top: 12px;
+    font-size: clamp(1rem, 2.5vw, 1.15rem);
+    color: var(--text-sub);
+  }
+  .btn {
+    display: inline-block;
+    background: var(--pink);
+    color: #fff;
+    text-decoration: none;
+    font-weight: 700;
+    font-size: 1.2rem;
+    padding: 16px 44px;
+    border-radius: 999px;
+    box-shadow: 0 6px 24px rgba(214,51,108,.45);
+    margin-top: 24px;
+    transition: transform .15s ease;
+  }
+  .btn:hover { transform: translateY(-2px); }
+  header .sub { margin-top: 12px; color: var(--text-dim); font-size: .88rem; }
+  header .sub a { color: var(--text-dim); text-decoration: underline; }
+  .home-link {
+    display: inline-block;
+    margin-top: 20px;
+    color: var(--text-dim);
+    font-size: .85rem;
+    text-decoration: none;
+  }
+  .home-link:hover { color: var(--yellow); }
+
+  section { padding: 36px 0; }
+  h2 { font-weight: 700; font-size: 1.45rem; text-align: center; margin-bottom: 24px; }
+  h2 .accent { color: var(--yellow); }
+
+  .local-box {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+    text-align: center;
+    color: var(--text-sub);
+    font-size: .98rem;
+  }
+  .local-box strong { color: var(--yellow); font-weight: 700; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 18px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 22px 20px;
+  }
+  .card .emoji { font-size: 1.8rem; }
+  .card h3 { font-weight: 700; font-size: 1.05rem; margin: 6px 0; }
+  .card p { color: var(--text-sub); font-size: .9rem; }
+
+  ol.steps { max-width: 640px; margin: 0 auto; padding-left: 0; list-style: none; counter-reset: step; }
+  ol.steps li {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px 20px 18px 60px;
+    margin-bottom: 14px;
+    position: relative;
+  }
+  ol.steps li::before {
+    counter-increment: step;
+    content: counter(step);
+    position: absolute;
+    left: 16px; top: 16px;
+    width: 30px; height: 30px;
+    background: var(--pink);
+    color: #fff;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 900;
+  }
+  ol.steps li b { color: var(--text); }
+  code {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-size: .9em;
+    color: var(--yellow);
+  }
+  .warn {
+    max-width: 640px;
+    margin: 8px auto 0;
+    background: rgba(255,196,0,.1);
+    border: 1px solid var(--yellow);
+    border-radius: 12px;
+    padding: 14px 18px;
+    font-size: .9rem;
+    color: var(--text-sub);
+  }
+  .warn strong { color: var(--yellow); }
+
+  .update-note {
+    max-width: 640px; margin: 0 auto;
+    text-align: center; color: var(--text-sub); font-size: .95rem;
+  }
+
+  /* 広告枠（ハウス広告） */
+  .sponsor-strip {
+    background: linear-gradient(135deg, rgba(214,51,108,.12), rgba(255,196,0,.08));
+    border: 1px dashed var(--pink);
+    border-radius: 16px;
+    padding: 22px;
+    text-align: center;
+  }
+  .sponsor-strip p { color: var(--text-sub); font-size: .92rem; margin-bottom: 12px; }
+  .sponsor-strip a.mini {
+    display: inline-block;
+    background: var(--pink);
+    color: #fff;
+    text-decoration: none;
+    font-weight: 700;
+    font-size: .95rem;
+    padding: 10px 28px;
+    border-radius: 999px;
+  }
+
+  details {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 4px 18px;
+    margin-bottom: 10px;
+  }
+  details summary {
+    font-weight: 700;
+    cursor: pointer;
+    padding: 12px 0;
+    list-style: none;
+  }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::before { content: "＋ "; color: var(--pink); font-weight: 900; }
+  details[open] summary::before { content: "− "; }
+  details p { color: var(--text-sub); font-size: .92rem; padding: 0 0 14px; }
+
+  .legal {
+    max-width: 720px; margin: 0 auto;
+    color: var(--text-dim); font-size: .82rem;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+  }
+  .legal p + p { margin-top: 8px; }
+
+  footer {
+    border-top: 1px solid var(--border);
+    margin-top: 36px;
+    padding: 28px 20px 44px;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: .8rem;
+  }
+  footer p + p { margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<header>
+  <img class="logo" src="assets/patti_logo.png" alt="PATTI CROP ロゴ">
+  <h1>PATTI <span class="accent">CROP</span></h1>
+  <p class="tagline">動画の上下左右をクロップ＋Windows・iPhoneで<br>再生できる形式に変換する無料ツール</p>
+  <a class="btn" href="https://github.com/ikemotodir/patti-crop/archive/refs/heads/main.zip"
+     onclick="gtag('event','download',{app:'patti-crop'})">⬇ 無料ダウンロード（Windows）</a>
+  <p class="sub">無料・登録不要・Windows 10/11用 ／ <a href="https://github.com/ikemotodir/patti-crop">ソースコードを見る（GitHub）</a></p>
+  <a class="home-link" href="https://ikemotodir.github.io/">← PATTIツールの棚にもどる</a>
+</header>
+
+<main class="wrap">
+
+  <!-- 完全ローカルの安心 -->
+  <section>
+    <div class="local-box">
+      動画はサイズも大きいし、撮影中の素材は外に出したくないもの。<br>
+      PATTI CROP は<strong>あなたのPCの中だけ</strong>で動くから、アップロード待ちゼロ・情報漏れの心配ゼロ。<br>
+      <strong>元の動画ファイルも変更されません</strong>（別名で新しく保存されます）。
+    </div>
+  </section>
+
+  <!-- できること -->
+  <section>
+    <h2>🎬 こんなことが<span class="accent">できる</span></h2>
+    <div class="grid">
+      <div class="card">
+        <div class="emoji">✂️</div>
+        <h3>ドラッグでクロップ</h3>
+        <p>スマホみたいにマウスでクロップ範囲を調整。16:9 / 9:16 / 1:1 / 4:3 / フリーのプリセット付き。画面録画からタスクバーを切り落とすのも簡単。</p>
+      </div>
+      <div class="card">
+        <div class="emoji">🔄</div>
+        <h3>再生できる形式に変換</h3>
+        <p>プロ用カメラの動画（H.264 4:2:2 10-bitなど）を、Windows・iPhone・スマホで確実に再生できるMP4に。「サポートされていないエンコード設定」エラーとサヨナラ。</p>
+      </div>
+      <div class="card">
+        <div class="emoji">📚</div>
+        <h3>まとめて一括処理</h3>
+        <p>何本でもドンと追加OK。1本ずつ別々のクロップも、全ファイルに同じクロップの一括適用も自由。クロップなしの「変換だけ」もできます。</p>
+      </div>
+      <div class="card">
+        <div class="emoji">🔒</div>
+        <h3>完全ローカル動作</h3>
+        <p>動画はネットに一切送信されません。AIも使っていないので学習もされません。全部あなたのPCの中で完結します。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- はじめかた -->
+  <section>
+    <h2>🚀 はじめかた（<span class="accent">3ステップ</span>）</h2>
+    <ol class="steps">
+      <li>上の <b>「⬇ 無料ダウンロード」</b> を押す<br>
+        （またはGitHubの緑の <b>「Code」→「Download ZIP」</b>）→ zipファイルが保存されます</li>
+      <li>保存したzipを<b>右クリック →「すべて展開」</b><br>好きな場所（例：ドキュメント）に展開</li>
+      <li>出てきたフォルダの <code>setup.bat</code> を<b>ダブルクリック</b><br>
+        Python・ffmpegのチェック → ffmpeg自動インストール → デスクトップにアイコン作成 → 起動まで<b>全部自動</b>で進みます</li>
+    </ol>
+    <div class="warn">
+      <strong>⚠ Pythonが入っていない場合</strong>：<a href="https://www.python.org/downloads/" style="color:var(--yellow)">python.org</a> からインストールしてください。
+      インストール画面の <strong>「Add python.exe to PATH」に必ずチェック</strong> を入れるのがコツです（ここだけ注意！）。
+    </div>
+  </section>
+
+  <!-- アップデート -->
+  <section>
+    <h2>🔃 アップデート</h2>
+    <p class="update-note">
+      フォルダ内の <code>update.bat</code> をダブルクリックするだけ。<br>
+      最新版のダウンロード → 適用 → 再起動まで全自動。<b>設定はそのまま引き継がれます。</b>
+    </p>
+  </section>
+
+  <!-- 広告枠（ハウス広告） -->
+  <section>
+    <h2>📣 <span class="accent">SPONSOR</span></h2>
+    <div class="sponsor-strip">
+      <p>PATTI CROP は、STUDIO PATTI が無料で公開しているツールです。<br>この棚を応援いただけるスポンサーを募集しています。</p>
+      <a class="mini" href="https://ikemotodir.github.io/contact.html"
+         onclick="gtag('event','sponsor_contact_click',{from:'patti-crop'})">広告掲載の相談をする</a>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section>
+    <h2>❓ よくある質問</h2>
+
+    <details><summary>動画がAIに学習されたりしない？</summary>
+      <p>されません。そもそもAIは使っていません。動画はあなたのPCの中だけで処理され、外部に送信されることはありません。</p></details>
+
+    <details><summary>動画がどこかのサーバーに保存されない？</summary>
+      <p>されません。完全ローカル動作で、出力ファイルもあなたのPC内だけ。元のファイルも変更されません。</p></details>
+
+    <details><summary>ネット通信は本当にないの？</summary>
+      <p>変換処理は通信ゼロです。通信するのは「初回 setup.bat のffmpeg自動インストール」と「update.bat の更新チェック」のときだけ。</p></details>
+
+    <details><summary>オフラインで使える？</summary>
+      <p>使えます。セットアップさえ終われば、機内モードでも動きます。</p></details>
+
+    <details><summary>一度に何ファイルまで？合計何GBまで？</summary>
+      <p>上限はありません。ファイルは上から順に1本ずつ処理されるので、何本・何GBあってもPCのメモリを圧迫しません。気にするのは「出力先の空き容量」と「変換にかかる時間」だけです（CPU変換だと4Kは1本ずつ時間がかかります）。</p></details>
+
+    <details><summary>元の動画は消えたり変わったりする？</summary>
+      <p>消えません・変わりません。「元のファイル名＿crop.mp4」などの別名で、新しく保存されます。</p></details>
+
+    <details><summary>Macで使える？</summary>
+      <p>現在はWindows専用（Windows 10 / 11）です。</p></details>
+
+    <details><summary>商用利用できる？</summary>
+      <p>できます。ただし、あなたが権利を持たない動画の変換・再配布はしないでください。</p></details>
+
+    <details><summary>なぜ無料なの？怪しくない？</summary>
+      <p>「クリエイターがちょっと助かるツールを無料で公開する」という STUDIO PATTI の活動の一環です（このページの広告枠などで運営しています）。全ソースコードをGitHubで公開しているので、中身は誰でも確認できます。</p></details>
+
+    <details><summary>アップデートはどうやる？</summary>
+      <p>フォルダ内の update.bat をダブルクリックするだけです。GitHubから最新版を自動ダウンロードして適用・再起動まで全自動、設定も引き継がれます。zipを手動でダウンロードする必要はありません。</p></details>
+  </section>
+
+  <!-- 免責 -->
+  <section>
+    <div class="legal">
+      <p>※本ツールの利用によって生じたいかなる損害・トラブルについても、STUDIO PATTI（合同会社スタジオパッチ）は一切の責任を負いません。自己責任でご利用ください。</p>
+      <p>※権利を持たない動画の変換・再配布は行わないでください。</p>
+      <p>※お使いの環境によっては、正しく動作しない場合があります。</p>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <p>🎬 PATTI CROP v1.3.1</p>
+  <p>© 2026 STUDIO PATTI LLC ── 合同会社スタジオパッチ（愛知県一宮市）</p>
+  <p><a href="https://ikemotodir.github.io/" style="color:var(--yellow)">← PATTI CREATIVE PRODUCT トップへ</a></p>
+</footer>
+
+</body>
+</html>

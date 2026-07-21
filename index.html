@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PATTI CROP</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel2: #1c2330;
+    --border: #2d3748;
+    --text: #e6edf3;
+    --sub: #8b949e;
+    --accent: #f0a500;
+    --accent2: #ff6b35;
+    --ok: #3fb950;
+    --warn: #f85149;
+    --blue: #58a6ff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", "Yu Gothic UI", "Meiryo", sans-serif;
+    min-height: 100vh;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 24px;
+    background: linear-gradient(90deg, #161b22, #1a1410);
+    border-bottom: 2px solid var(--accent);
+  }
+  header .logo {
+    font-size: 22px; font-weight: 800; letter-spacing: 2px;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  header .tagline { color: var(--sub); font-size: 12px; }
+  main { max-width: 1280px; margin: 0 auto; padding: 20px 24px 60px; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px 20px; margin-bottom: 16px;
+  }
+  .card h2 {
+    font-size: 14px; color: var(--accent); letter-spacing: 1px;
+    margin-bottom: 12px; text-transform: uppercase;
+  }
+
+  /* ファイル選択 */
+  .file-row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .file-row input[type=text] {
+    flex: 1; min-width: 240px;
+    background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 12px; color: var(--text); font-size: 13px;
+  }
+  button {
+    background: var(--panel2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 18px; font-size: 13px; cursor: pointer;
+    transition: all .15s; font-family: inherit;
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary {
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    color: #14100a; font-weight: 700; border: none; font-size: 15px;
+    padding: 12px 32px;
+  }
+  button.primary:hover { filter: brightness(1.15); color: #14100a; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+
+  /* ファイルリスト */
+  #queueWrap { margin-top: 14px; }
+  #queueWrap h3 { font-size: 12px; color: var(--sub); margin-bottom: 8px; letter-spacing: 1px; }
+  .q-row {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 12px; margin-bottom: 6px;
+    cursor: pointer; transition: border-color .15s;
+  }
+  .q-row:hover { border-color: var(--accent); }
+  .q-row.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .q-row .q-name { flex: 1; font-size: 13px; word-break: break-all; }
+  .q-row .q-meta { font-size: 11px; color: var(--sub); white-space: nowrap; }
+  .q-badge {
+    font-size: 11px; padding: 3px 10px; border-radius: 10px; white-space: nowrap;
+  }
+  .q-badge.idle { background: rgba(139,148,158,.15); color: var(--sub); }
+  .q-badge.crop { background: rgba(240,165,0,.15); color: var(--accent); }
+  .q-badge.running { background: rgba(88,166,255,.15); color: var(--blue); }
+  .q-badge.done { background: rgba(63,185,80,.15); color: var(--ok); }
+  .q-badge.error { background: rgba(248,81,73,.15); color: var(--warn); }
+  .q-del {
+    background: none; border: none; color: var(--sub); font-size: 15px;
+    cursor: pointer; padding: 2px 6px;
+  }
+  .q-del:hover { color: var(--warn); }
+
+  /* 情報表示 */
+  .info-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px; margin-bottom: 10px;
+  }
+  .info-item { background: var(--panel2); border-radius: 8px; padding: 8px 12px; }
+  .info-item .k { font-size: 11px; color: var(--sub); }
+  .info-item .v { font-size: 14px; font-weight: 600; margin-top: 2px; }
+  .badge-warn {
+    background: rgba(248,81,73,.12); border: 1px solid var(--warn);
+    color: var(--warn); border-radius: 8px; padding: 10px 14px;
+    font-size: 13px; line-height: 1.7;
+  }
+  .badge-ok {
+    background: rgba(63,185,80,.1); border: 1px solid var(--ok);
+    color: var(--ok); border-radius: 8px; padding: 10px 14px; font-size: 13px;
+  }
+
+  /* プレビュー */
+  .preview-wrap { display: flex; gap: 20px; flex-wrap: wrap; }
+  .preview-main { flex: 1; min-width: 480px; }
+  #stage {
+    position: relative; user-select: none; touch-action: none;
+    background: #000; border-radius: 8px; overflow: hidden;
+    display: inline-block; max-width: 100%;
+  }
+  #frameImg { display: block; max-width: 100%; max-height: 64vh; pointer-events: none; }
+  #stage.loading::after {
+    content: "読み込み中..."; position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,.5); color: var(--accent); font-size: 14px;
+  }
+  /* クロップオーバーレイ */
+  #cropBox {
+    position: absolute; border: 2px solid var(--accent);
+    box-shadow: 0 0 0 9999px rgba(0,0,0,.55);
+    cursor: move;
+  }
+  #cropBox .grid-line { position: absolute; background: rgba(240,165,0,.35); pointer-events: none; }
+  .gl-v1 { left: 33.33%; top: 0; width: 1px; height: 100%; }
+  .gl-v2 { left: 66.66%; top: 0; width: 1px; height: 100%; }
+  .gl-h1 { top: 33.33%; left: 0; height: 1px; width: 100%; }
+  .gl-h2 { top: 66.66%; left: 0; height: 1px; width: 100%; }
+  .handle {
+    position: absolute; width: 16px; height: 16px;
+    background: var(--accent); border-radius: 50%;
+    border: 2px solid #14100a;
+  }
+  .h-nw { top: -8px; left: -8px; cursor: nwse-resize; }
+  .h-n  { top: -8px; left: calc(50% - 8px); cursor: ns-resize; }
+  .h-ne { top: -8px; right: -8px; cursor: nesw-resize; }
+  .h-e  { top: calc(50% - 8px); right: -8px; cursor: ew-resize; }
+  .h-se { bottom: -8px; right: -8px; cursor: nwse-resize; }
+  .h-s  { bottom: -8px; left: calc(50% - 8px); cursor: ns-resize; }
+  .h-sw { bottom: -8px; left: -8px; cursor: nesw-resize; }
+  .h-w  { top: calc(50% - 8px); left: -8px; cursor: ew-resize; }
+
+  .time-row { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+  .time-row input[type=range] { flex: 1; accent-color: var(--accent); }
+  .time-row .t { font-size: 12px; color: var(--sub); min-width: 90px; text-align: right; }
+
+  /* サイドパネル */
+  .side { width: 300px; display: flex; flex-direction: column; gap: 14px; }
+  .side h3 { font-size: 12px; color: var(--sub); margin-bottom: 8px; letter-spacing: 1px; }
+  .preset-row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .preset-row button { padding: 7px 12px; font-size: 12px; }
+  .preset-row button.active {
+    background: var(--accent); color: #14100a; border-color: var(--accent); font-weight: 700;
+  }
+  .num-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .num-grid label { font-size: 11px; color: var(--sub); display: block; margin-bottom: 3px; }
+  .num-grid input {
+    width: 100%; background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 9px; color: var(--text); font-size: 13px;
+  }
+  .crop-size-note { font-size: 12px; color: var(--accent); margin-top: 6px; }
+  select {
+    background: var(--panel2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 10px; color: var(--text);
+    font-size: 13px; width: 100%; font-family: inherit;
+  }
+  .check-row { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-top: 8px; }
+  .check-row input { accent-color: var(--accent); width: 16px; height: 16px; }
+  #applyAllBtn { width: 100%; margin-top: 8px; font-size: 12px; }
+  #applyAllNote { font-size: 11px; color: var(--ok); margin-top: 4px; min-height: 14px; }
+
+  /* 変換パネル */
+  .convert-bar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .progress-outer {
+    flex: 1; min-width: 200px; height: 14px;
+    background: var(--panel2); border-radius: 7px; overflow: hidden;
+    border: 1px solid var(--border);
+  }
+  .progress-inner {
+    height: 100%; width: 0%;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    transition: width .3s; border-radius: 7px;
+  }
+  #progressText { font-size: 13px; color: var(--sub); min-width: 160px; }
+  .done-box {
+    background: rgba(63,185,80,.1); border: 1px solid var(--ok);
+    border-radius: 8px; padding: 12px 16px; margin-top: 12px;
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  }
+  .done-box .path { font-size: 13px; color: var(--ok); word-break: break-all; flex: 1; }
+  .error-box {
+    background: rgba(248,81,73,.1); border: 1px solid var(--warn);
+    border-radius: 8px; padding: 12px 16px; margin-top: 12px;
+    font-size: 12px; color: var(--warn); white-space: pre-wrap; word-break: break-all;
+  }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">PATTI CROP</div>
+  <div class="tagline">動画クロップ &amp; Windows/iPhone対応形式に変換 <span id="verLabel"></span></div>
+  <button id="quitBtn" style="margin-left:auto;border-color:var(--warn);color:var(--warn);">⏻ アプリを終了</button>
+</header>
+<main>
+
+  <!-- STEP 1: ファイル選択 -->
+  <div class="card">
+    <h2>① 動画ファイルを選ぶ（複数OK）</h2>
+    <div class="file-row">
+      <button id="pickBtn">📂 ファイルを選択（複数選択OK）</button>
+      <input type="text" id="pathInput" placeholder="またはファイルのフルパスを貼り付けてEnterで追加">
+      <button id="loadBtn">追加</button>
+    </div>
+    <div id="queueWrap" class="hidden">
+      <h3>ファイルリスト（クリックで切り替えて、それぞれクロップを設定できるよ）</h3>
+      <div id="queueList"></div>
+    </div>
+    <div id="fileInfo" class="hidden" style="margin-top: 10px;">
+      <div class="info-grid" id="infoGrid"></div>
+      <div id="playableBadge"></div>
+    </div>
+  </div>
+
+  <!-- STEP 2: クロップ -->
+  <div class="card hidden" id="cropCard">
+    <h2>② クロップ範囲を調整（不要なら「クロップなし」のままでOK）</h2>
+    <div class="preview-wrap">
+      <div class="preview-main">
+        <div id="stage">
+          <img id="frameImg" alt="">
+          <div id="cropBox">
+            <div class="grid-line gl-v1"></div><div class="grid-line gl-v2"></div>
+            <div class="grid-line gl-h1"></div><div class="grid-line gl-h2"></div>
+            <div class="handle h-nw" data-dir="nw"></div>
+            <div class="handle h-n"  data-dir="n"></div>
+            <div class="handle h-ne" data-dir="ne"></div>
+            <div class="handle h-e"  data-dir="e"></div>
+            <div class="handle h-se" data-dir="se"></div>
+            <div class="handle h-s"  data-dir="s"></div>
+            <div class="handle h-sw" data-dir="sw"></div>
+            <div class="handle h-w"  data-dir="w"></div>
+          </div>
+        </div>
+        <div class="time-row">
+          <span style="font-size:12px;color:var(--sub);">シーク</span>
+          <input type="range" id="timeSlider" min="0" max="100" value="0" step="0.1">
+          <span class="t" id="timeLabel">0.0s / 0.0s</span>
+        </div>
+      </div>
+      <div class="side">
+        <div>
+          <h3>アスペクト比プリセット</h3>
+          <div class="preset-row" id="presetRow">
+            <button data-ar="none" class="active">クロップなし</button>
+            <button data-ar="free">フリー</button>
+            <button data-ar="16:9">16:9</button>
+            <button data-ar="9:16">9:16</button>
+            <button data-ar="1:1">1:1</button>
+            <button data-ar="4:3">4:3</button>
+          </div>
+          <button id="applyAllBtn">⧉ このクロップを全ファイルに適用</button>
+          <div id="applyAllNote"></div>
+        </div>
+        <div id="numPanel" class="hidden">
+          <h3>数値指定（元動画ピクセル）</h3>
+          <div class="num-grid">
+            <div><label>X（左から）</label><input type="number" id="numX" min="0"></div>
+            <div><label>Y（上から）</label><input type="number" id="numY" min="0"></div>
+            <div><label>幅</label><input type="number" id="numW" min="16"></div>
+            <div><label>高さ</label><input type="number" id="numH" min="16"></div>
+          </div>
+          <div class="crop-size-note" id="cropNote"></div>
+        </div>
+        <div>
+          <h3>出力設定</h3>
+          <select id="qualitySel">
+            <option value="high">高画質（ファイル大きめ）</option>
+            <option value="std">標準（ファイル小さめ）</option>
+          </select>
+          <div class="check-row">
+            <input type="checkbox" id="gpuCheck" checked>
+            <label for="gpuCheck" id="gpuLabel">GPU高速エンコード</label>
+          </div>
+        </div>
+        <div>
+          <h3>出力先フォルダ</h3>
+          <select id="outDirSel">
+            <option value="same">元ファイルと同じフォルダ</option>
+            <option value="custom">フォルダを指定する</option>
+          </select>
+          <div id="outDirRow" class="hidden" style="margin-top:8px;display:flex;gap:6px;align-items:center;">
+            <button id="outDirBtn" style="padding:7px 12px;font-size:12px;">📂 選択</button>
+            <span id="outDirLabel" style="font-size:11px;color:var(--sub);word-break:break-all;"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 3: 変換 -->
+  <div class="card hidden" id="convertCard">
+    <h2>③ 変換して書き出す</h2>
+    <div class="convert-bar">
+      <button class="primary" id="convertBtn">🚀 まとめて変換スタート</button>
+      <div class="progress-outer"><div class="progress-inner" id="progressBar"></div></div>
+      <span id="progressText">待機中</span>
+      <button id="cancelBtn" class="hidden">中止</button>
+    </div>
+    <div style="font-size:12px;color:var(--sub);margin-top:8px;">
+      出力: H.264 (4:2:0 8-bit) + AAC の MP4 — Windows・iPhone・スマホ全部で再生OK。リストの上から順に1本ずつ変換するよ。<br>
+      <span style="color:var(--accent);">本数・合計サイズに上限なし</span>（1本ずつ処理するのでPCは重くならない）。気にするのは空き容量と時間だけ。
+    </div>
+    <div class="done-box hidden" id="doneBox">
+      <span style="font-size:20px;">✅</span>
+      <span class="path" id="donePath"></span>
+      <button id="openFolderBtn">📁 フォルダを開く</button>
+    </div>
+    <div class="error-box hidden" id="errorBox"></div>
+  </div>
+
+  <div style="text-align:center;color:var(--sub);font-size:11px;line-height:1.8;padding:10px 0 0;">
+    PATTI CROP — STUDIO PATTI の無料ツール<br>
+    変換・クロップはご自身の責任でご利用ください。元ファイルは変更されません。<br>
+    詳しい使い方・注意事項は配布ページをチェック！
+  </div>
+
+</main>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+
+// files: {path, info, crop, aspect, status, percent, out, error}
+let files = [];
+let cur = -1;
+let info = null;          // 現在ファイルのprobe結果 (files[cur].info のエイリアス)
+let crop = null;          // 現在ファイルのクロップ
+let aspect = "none";
+let scale = 1;
+let currentTime = 0;
+let converting = false;
+let cancelAll = false;
+let jobId = null;
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// 起動時: GPU可否・バージョン・保存済み出力先を反映
+fetch("/api/caps").then(r => r.json()).then(c => {
+  if (!c.nvenc) {
+    $("gpuCheck").checked = false;
+    $("gpuCheck").disabled = true;
+    $("gpuLabel").textContent = "GPU高速エンコード（NVIDIAドライバが古いため利用不可 → ドライバ更新で有効化）";
+  }
+  if (c.version) $("verLabel").textContent = "v" + c.version;
+  if (c.out_dir) {
+    $("outDirSel").value = "custom";
+    $("outDirRow").classList.remove("hidden");
+    $("outDirLabel").textContent = c.out_dir;
+  }
+});
+
+// ---------- ファイル追加 ----------
+$("pickBtn").onclick = async () => {
+  $("pickBtn").disabled = true;
+  $("pickBtn").textContent = "ダイアログを開いています...";
+  try {
+    const r = await fetch("/api/pick-multi", { method: "POST", body: "{}" }).then(r => r.json());
+    if (r.paths) { for (const p of r.paths) await addFile(p); }
+  } finally {
+    $("pickBtn").disabled = false;
+    $("pickBtn").textContent = "📂 ファイルを選択（複数選択OK）";
+  }
+};
+$("loadBtn").onclick = () => { addFile($("pathInput").value); $("pathInput").value = ""; };
+$("pathInput").addEventListener("keydown", e => {
+  if (e.key === "Enter") { addFile($("pathInput").value); $("pathInput").value = ""; }
+});
+
+async function addFile(path) {
+  path = (path || "").trim().replace(/^"|"$/g, "");
+  if (!path) return;
+  if (files.some(f => f.path === path)) { selectFile(files.findIndex(f => f.path === path)); return; }
+  const r = await fetch("/api/probe", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  }).then(r => r.json());
+  if (r.error) { alert(r.error); return; }
+  files.push({ path, info: r, crop: null, aspect: "none", status: "idle", percent: 0 });
+  $("cropCard").classList.remove("hidden");
+  $("convertCard").classList.remove("hidden");
+  selectFile(files.length - 1);
+}
+
+function removeFile(i) {
+  if (converting) return;
+  files.splice(i, 1);
+  if (files.length === 0) {
+    cur = -1; info = null; crop = null;
+    $("queueWrap").classList.add("hidden");
+    $("fileInfo").classList.add("hidden");
+    $("cropCard").classList.add("hidden");
+    $("convertCard").classList.add("hidden");
+    return;
+  }
+  selectFile(Math.min(i, files.length - 1));
+}
+
+function selectFile(i) {
+  cur = i;
+  const f = files[i];
+  info = f.info; crop = f.crop; aspect = f.aspect;
+  currentTime = 0;
+  renderInfo();
+  renderQueue();
+  document.querySelectorAll("#presetRow button").forEach(b =>
+    b.classList.toggle("active", b.dataset.ar === aspect));
+  $("timeSlider").max = Math.max(0.1, info.duration - 0.05);
+  $("timeSlider").value = 0;
+  updateTimeLabel();
+  loadFrame(0);
+}
+
+// ---------- ファイルリスト表示 ----------
+function badgeFor(f) {
+  if (f.status === "running") return `<span class="q-badge running">変換中 ${Math.round(f.percent)}%</span>`;
+  if (f.status === "done") return `<span class="q-badge done">✅ 完了</span>`;
+  if (f.status === "error") return `<span class="q-badge error">⚠ エラー</span>`;
+  if (f.crop) {
+    const ew = Math.floor(f.crop.w / 2) * 2, eh = Math.floor(f.crop.h / 2) * 2;
+    return `<span class="q-badge crop">✂ ${ew}×${eh}</span>`;
+  }
+  return `<span class="q-badge idle">クロップなし</span>`;
+}
+
+function renderQueue() {
+  $("queueWrap").classList.toggle("hidden", files.length === 0);
+  $("queueList").innerHTML = files.map((f, i) => `
+    <div class="q-row ${i === cur ? "selected" : ""}" data-i="${i}">
+      <span class="q-name">${f.info.name}</span>
+      <span class="q-meta">${f.info.width}×${f.info.height}</span>
+      ${badgeFor(f)}
+      <button class="q-del" data-del="${i}" title="リストから外す">✕</button>
+    </div>`).join("");
+}
+
+$("queueList").addEventListener("click", e => {
+  const del = e.target.closest("[data-del]");
+  if (del) { removeFile(parseInt(del.dataset.del)); return; }
+  const row = e.target.closest(".q-row");
+  if (row) selectFile(parseInt(row.dataset.i));
+});
+
+function fmtSize(b) {
+  if (b > 1e9) return (b / 1e9).toFixed(2) + " GB";
+  if (b > 1e6) return (b / 1e6).toFixed(1) + " MB";
+  return Math.round(b / 1e3) + " KB";
+}
+
+function renderInfo() {
+  const items = [
+    ["ファイル", info.name],
+    ["解像度", `${info.width}×${info.height}`],
+    ["長さ", info.duration.toFixed(1) + " 秒"],
+    ["fps", info.fps],
+    ["映像", `${info.vcodec.toUpperCase()} ${info.profile}`],
+    ["ピクセル形式", info.pix_fmt],
+    ["音声", info.acodec ? info.acodec.toUpperCase() : "なし"],
+    ["サイズ", fmtSize(info.size)],
+  ];
+  $("infoGrid").innerHTML = items.map(([k, v]) =>
+    `<div class="info-item"><div class="k">${k}</div><div class="v">${v}</div></div>`).join("");
+  $("playableBadge").innerHTML = info.needs_convert
+    ? `<div class="badge-warn">⚠️ このファイルはWindows・iPhoneでそのまま再生できない可能性が高いよ！<br>${info.reasons.join("<br>")}<br>→ 変換すれば再生できるようになる！</div>`
+    : `<div class="badge-ok">✅ このファイルはたぶんそのまま再生できる形式。クロップ目的でそのまま進めてOK！</div>`;
+  $("fileInfo").classList.remove("hidden");
+}
+
+// ---------- フレームプレビュー ----------
+async function loadFrame(t) {
+  const stage = $("stage");
+  stage.classList.add("loading");
+  const img = $("frameImg");
+  const url = `/api/frame?path=${encodeURIComponent(info.path)}&t=${t}&w=960`;
+  await new Promise(res => {
+    img.onload = res; img.onerror = res;
+    img.src = url + `&_=${Date.now()}`;
+  });
+  stage.classList.remove("loading");
+  scale = img.clientWidth / info.width;
+  updateCropUI();
+}
+
+let frameDebounce = null;
+$("timeSlider").addEventListener("input", () => {
+  currentTime = parseFloat($("timeSlider").value);
+  updateTimeLabel();
+  clearTimeout(frameDebounce);
+  frameDebounce = setTimeout(() => loadFrame(currentTime), 180);
+});
+function updateTimeLabel() {
+  $("timeLabel").textContent = `${currentTime.toFixed(1)}s / ${(info ? info.duration : 0).toFixed(1)}s`;
+}
+window.addEventListener("resize", () => {
+  if (!info) return;
+  scale = $("frameImg").clientWidth / info.width;
+  updateCropUI();
+});
+
+// ---------- アスペクト比プリセット ----------
+$("presetRow").addEventListener("click", e => {
+  const btn = e.target.closest("button"); if (!btn || cur < 0) return;
+  document.querySelectorAll("#presetRow button").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+  aspect = btn.dataset.ar;
+  if (aspect === "none") { crop = null; }
+  else {
+    const W = info.width, H = info.height;
+    let cw, ch;
+    if (aspect === "free") { cw = Math.round(W * 0.8); ch = Math.round(H * 0.8); }
+    else {
+      const [aw, ah] = aspect.split(":").map(Number);
+      const s = Math.min(W / aw, H / ah) * 0.9;
+      cw = Math.round(aw * s); ch = Math.round(ah * s);
+    }
+    crop = { x: Math.round((W - cw) / 2), y: Math.round((H - ch) / 2), w: cw, h: ch };
+  }
+  updateCropUI();
+});
+
+function aspectRatio() {
+  if (aspect === "free" || aspect === "none") return null;
+  const [aw, ah] = aspect.split(":").map(Number);
+  return aw / ah;
+}
+
+// ---------- 全ファイルに適用 ----------
+$("applyAllBtn").onclick = () => {
+  if (cur < 0 || files.length < 2) { $("applyAllNote").textContent = "対象ファイルが1つだけだよ"; return; }
+  for (let j = 0; j < files.length; j++) {
+    if (j === cur || files[j].status === "done") continue;
+    const fj = files[j];
+    fj.aspect = aspect;
+    if (!crop) { fj.crop = null; continue; }
+    const W = fj.info.width, H = fj.info.height;
+    const c = { x: crop.x, y: crop.y, w: crop.w, h: crop.h };
+    c.w = Math.max(16, Math.min(c.w, W));
+    c.h = Math.max(16, Math.min(c.h, H));
+    c.x = Math.max(0, Math.min(c.x, W - c.w));
+    c.y = Math.max(0, Math.min(c.y, H - c.h));
+    fj.crop = c;
+  }
+  renderQueue();
+  $("applyAllNote").textContent = `✔ ${files.length}ファイルに適用したよ（解像度が違う場合は収まるよう調整）`;
+  setTimeout(() => { $("applyAllNote").textContent = ""; }, 4000);
+};
+
+// ---------- クロップUI ----------
+function clampCrop() {
+  if (!crop) return;
+  crop.w = Math.max(16, Math.min(crop.w, info.width));
+  crop.h = Math.max(16, Math.min(crop.h, info.height));
+  crop.x = Math.max(0, Math.min(crop.x, info.width - crop.w));
+  crop.y = Math.max(0, Math.min(crop.y, info.height - crop.h));
+}
+
+function updateCropUI() {
+  // 現在ファイルへ反映
+  if (cur >= 0) { files[cur].crop = crop; files[cur].aspect = aspect; renderQueue(); }
+  const box = $("cropBox");
+  if (!crop) {
+    box.style.display = "none";
+    $("numPanel").classList.add("hidden");
+    return;
+  }
+  clampCrop();
+  box.style.display = "block";
+  $("numPanel").classList.remove("hidden");
+  box.style.left = (crop.x * scale) + "px";
+  box.style.top = (crop.y * scale) + "px";
+  box.style.width = (crop.w * scale) + "px";
+  box.style.height = (crop.h * scale) + "px";
+  $("numX").value = crop.x; $("numY").value = crop.y;
+  $("numW").value = crop.w; $("numH").value = crop.h;
+  const ew = Math.floor(crop.w / 2) * 2, eh = Math.floor(crop.h / 2) * 2;
+  $("cropNote").textContent = `出力サイズ: ${ew}×${eh}`;
+}
+
+["numX", "numY", "numW", "numH"].forEach(id => {
+  $(id).addEventListener("change", () => {
+    if (!crop) return;
+    crop.x = parseInt($("numX").value) || 0;
+    crop.y = parseInt($("numY").value) || 0;
+    crop.w = parseInt($("numW").value) || 16;
+    crop.h = parseInt($("numH").value) || 16;
+    const ar = aspectRatio();
+    if (ar) crop.h = Math.round(crop.w / ar);
+    updateCropUI();
+  });
+});
+
+// ドラッグ&リサイズ
+let drag = null;
+$("cropBox").addEventListener("pointerdown", e => {
+  if (!crop) return;
+  e.preventDefault();
+  const dir = e.target.dataset ? e.target.dataset.dir : null;
+  drag = {
+    dir: dir || "move",
+    startX: e.clientX, startY: e.clientY,
+    orig: { ...crop },
+  };
+  e.target.setPointerCapture && e.target.setPointerCapture(e.pointerId);
+});
+window.addEventListener("pointermove", e => {
+  if (!drag || !crop) return;
+  const dx = (e.clientX - drag.startX) / scale;
+  const dy = (e.clientY - drag.startY) / scale;
+  const o = drag.orig;
+  const ar = aspectRatio();
+  const MIN = 16;
+
+  if (drag.dir === "move") {
+    crop.x = Math.round(o.x + dx);
+    crop.y = Math.round(o.y + dy);
+  } else {
+    let x = o.x, y = o.y, w = o.w, h = o.h;
+    const d = drag.dir;
+    if (d.includes("e")) w = o.w + dx;
+    if (d.includes("s")) h = o.h + dy;
+    if (d.includes("w")) { x = o.x + dx; w = o.w - dx; }
+    if (d.includes("n")) { y = o.y + dy; h = o.h - dy; }
+    w = Math.max(MIN, w); h = Math.max(MIN, h);
+    if (ar) {
+      if (d === "n" || d === "s") { w = h * ar; }
+      else { h = w / ar; }
+      if (d.includes("w")) x = o.x + o.w - w;
+      if (d.includes("n")) y = o.y + o.h - h;
+    }
+    crop.x = Math.round(x); crop.y = Math.round(y);
+    crop.w = Math.round(w); crop.h = Math.round(h);
+  }
+  clampCrop();
+  updateCropUI();
+});
+window.addEventListener("pointerup", () => { drag = null; });
+
+// ---------- 出力先フォルダ ----------
+$("outDirSel").addEventListener("change", async () => {
+  if ($("outDirSel").value === "same") {
+    $("outDirRow").classList.add("hidden");
+    await fetch("/api/set-out-dir", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ out_dir: null }),
+    });
+  } else {
+    $("outDirRow").classList.remove("hidden");
+    if (!$("outDirLabel").textContent) $("outDirBtn").click();
+  }
+});
+$("outDirBtn").onclick = async () => {
+  $("outDirBtn").disabled = true;
+  try {
+    const r = await fetch("/api/pick-dir", { method: "POST", body: "{}" }).then(r => r.json());
+    if (r.path) $("outDirLabel").textContent = r.path;
+  } finally { $("outDirBtn").disabled = false; }
+};
+
+// ---------- 一括変換 ----------
+function sendCropFor(f) {
+  if (!f.crop) return null;
+  const ew = Math.floor(f.crop.w / 2) * 2, eh = Math.floor(f.crop.h / 2) * 2;
+  if (ew >= f.info.width && eh >= f.info.height) return null;
+  return { x: f.crop.x, y: f.crop.y, w: ew, h: eh };
+}
+
+$("convertBtn").onclick = async () => {
+  const targets = files.filter(f => f.status !== "done");
+  if (!targets.length) { $("progressText").textContent = "全ファイル変換済みだよ"; return; }
+  converting = true; cancelAll = false;
+  $("convertBtn").disabled = true;
+  $("cancelBtn").classList.remove("hidden");
+  $("doneBox").classList.add("hidden");
+  $("errorBox").classList.add("hidden");
+
+  let doneCount = 0;
+  let lastOut = null;
+  const errors = [];
+
+  for (let k = 0; k < targets.length; k++) {
+    if (cancelAll) break;
+    const f = targets[k];
+    f.status = "running"; f.percent = 0;
+    renderQueue();
+    try {
+      const resp = await fetch("/api/convert", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: f.path,
+          crop: sendCropFor(f),
+          quality: $("qualitySel").value === "std" ? "std" : "high",
+          use_gpu: $("gpuCheck").checked,
+          duration: f.info.duration,
+          has_audio: !!f.info.acodec,
+        }),
+      }).then(r => r.json());
+      if (resp.error) throw new Error(resp.error);
+      jobId = resp.id;
+
+      while (true) {
+        await sleep(600);
+        const r = await fetch(`/api/progress?id=${jobId}`).then(r => r.json());
+        if (r.error) throw new Error(r.error);
+        f.percent = r.percent;
+        const overall = ((doneCount + r.percent / 100) / targets.length) * 100;
+        $("progressBar").style.width = overall + "%";
+        const enc = r.encoder === "nvenc" ? "GPU" : "CPU";
+        $("progressText").textContent = `${k + 1}/${targets.length}本目: ${f.info.name} (${enc}) ${r.percent}%`;
+        renderQueue();
+        if (r.state === "done") { f.status = "done"; f.out = r.out; lastOut = r.out; doneCount++; break; }
+        if (r.state === "cancelled") { f.status = "idle"; f.percent = 0; break; }
+        if (r.state === "error") throw new Error(r.error || "変換に失敗しました");
+      }
+    } catch (err) {
+      f.status = "error"; f.error = String(err.message || err);
+      errors.push(`${f.info.name}: ${f.error}`);
+    }
+    renderQueue();
+  }
+
+  converting = false;
+  $("convertBtn").disabled = false;
+  $("cancelBtn").classList.add("hidden");
+
+  if (cancelAll) {
+    $("progressText").textContent = `中止しました（${doneCount}本は完了済み）`;
+  } else {
+    $("progressBar").style.width = "100%";
+    $("progressText").textContent = `完了！ ${doneCount}/${targets.length}本`;
+  }
+  if (lastOut) {
+    $("donePath").textContent = doneCount > 1
+      ? `${doneCount}本の変換が完了したよ！（最後の出力: ${lastOut}）`
+      : lastOut;
+    $("doneBox").classList.remove("hidden");
+    $("openFolderBtn").onclick = () =>
+      fetch("/api/open-folder", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: lastOut }),
+      });
+  }
+  if (errors.length) {
+    $("errorBox").textContent = errors.join("\n");
+    $("errorBox").classList.remove("hidden");
+  }
+};
+
+$("cancelBtn").onclick = () => {
+  cancelAll = true;
+  fetch("/api/cancel", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: jobId }),
+  });
+};
+
+// ---------- アプリ終了 ----------
+$("quitBtn").onclick = async () => {
+  if (!confirm("PATTI CROPを終了する？")) return;
+  await fetch("/api/quit", { method: "POST", body: "{}" }).catch(() => {});
+  document.body.innerHTML = "<div style='display:flex;height:100vh;align-items:center;justify-content:center;color:#8b949e;font-size:16px;'>終了しました。このタブは閉じてOK！</div>";
+};
+</script>
+</body>
+</html>

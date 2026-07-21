@@ -1,0 +1,515 @@
+# -*- coding: utf-8 -*-
+"""
+PATTI CROP - 動画クロップ&変換アプリ
+ローカルHTTPサーバー (Python標準ライブラリのみ)
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+import threading
+import time
+import urllib.parse
+import webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+PORT = 8765
+APP_VERSION = "1.3.1"
+CONFIG_PATH = os.path.join(APP_DIR, "config.json")
+
+FFMPEG = "ffmpeg"
+FFPROBE = "ffprobe"
+
+# Windowsでコンソールウィンドウを出さない
+CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
+jobs = {}  # job_id -> dict
+jobs_lock = threading.Lock()
+_job_counter = [0]
+_nvenc_cache = [None]  # None=未判定, True/False
+
+
+def nvenc_available():
+    if _nvenc_cache[0] is None:
+        try:
+            r = run_cmd([
+                FFMPEG, "-v", "error", "-f", "lavfi",
+                "-i", "color=black:s=256x256:d=0.1",
+                "-c:v", "h264_nvenc", "-f", "null", "-",
+            ], timeout=30)
+            _nvenc_cache[0] = (r.returncode == 0)
+        except Exception:  # noqa: BLE001
+            _nvenc_cache[0] = False
+    return _nvenc_cache[0]
+
+
+def load_config():
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_config(cfg):
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+
+
+def run_cmd(args, timeout=None):
+    return subprocess.run(
+        args, capture_output=True, timeout=timeout,
+        creationflags=CREATE_NO_WINDOW,
+    )
+
+
+def probe_file(path):
+    r = run_cmd([
+        FFPROBE, "-v", "error",
+        "-show_entries", "format=duration,bit_rate,format_name",
+        "-show_entries", "stream=index,codec_type,codec_name,profile,pix_fmt,width,height,r_frame_rate,bit_rate,channels,sample_rate",
+        "-show_entries", "stream_side_data_list",
+        "-of", "json", path,
+    ], timeout=30)
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.decode("utf-8", "replace")[-500:])
+    data = json.loads(r.stdout.decode("utf-8", "replace"))
+    video = None
+    audio = None
+    for s in data.get("streams", []):
+        if s.get("codec_type") == "video" and video is None:
+            video = s
+        elif s.get("codec_type") == "audio" and audio is None:
+            audio = s
+    if video is None:
+        raise RuntimeError("動画ストリームが見つかりません")
+
+    fr = video.get("r_frame_rate", "0/1")
+    try:
+        num, den = fr.split("/")
+        fps = float(num) / float(den) if float(den) else 0
+    except (ValueError, ZeroDivisionError):
+        fps = 0
+
+    duration = float(data.get("format", {}).get("duration", 0) or 0)
+
+    # 回転メタデータ (縦撮り動画)。ffmpegはデコード時に自動回転するので、
+    # UI・クロップ座標は回転後の表示サイズで扱う
+    rotation = 0
+    for sd in video.get("side_data_list", []):
+        if "rotation" in sd:
+            try:
+                rotation = int(sd["rotation"])
+            except (TypeError, ValueError):
+                pass
+    width = video.get("width")
+    height = video.get("height")
+    if abs(rotation) % 180 == 90:
+        width, height = height, width
+
+    pix_fmt = video.get("pix_fmt", "")
+    vcodec = video.get("codec_name", "")
+    acodec = audio.get("codec_name", "") if audio else None
+
+    # Windows/iPhoneで再生できるかの簡易判定
+    playable_pix = pix_fmt in ("yuv420p", "yuvj420p", "nv12")
+    playable_v = vcodec in ("h264", "hevc") and playable_pix
+    playable_a = acodec in (None, "aac", "mp3")
+    needs_convert = not (playable_v and playable_a)
+
+    reasons = []
+    if vcodec not in ("h264", "hevc"):
+        reasons.append(f"映像コーデック {vcodec} は非対応の可能性")
+    elif not playable_pix:
+        reasons.append(f"ピクセル形式 {pix_fmt} (10-bit/4:2:2系) はWindows・iPhoneのデコーダー非対応")
+    if not playable_a:
+        reasons.append(f"音声 {acodec} (非圧縮PCM等) はMP4プレイヤー非対応の可能性")
+
+    return {
+        "path": path,
+        "name": os.path.basename(path),
+        "size": os.path.getsize(path),
+        "duration": duration,
+        "width": width,
+        "height": height,
+        "rotation": rotation,
+        "fps": round(fps, 3),
+        "vcodec": vcodec,
+        "profile": video.get("profile", ""),
+        "pix_fmt": pix_fmt,
+        "acodec": acodec,
+        "needs_convert": needs_convert,
+        "reasons": reasons,
+    }
+
+
+def extract_frame(path, t, width=960):
+    args = [
+        FFMPEG, "-v", "error",
+        "-ss", f"{max(0.0, t):.3f}", "-i", path,
+        "-frames:v", "1",
+        "-vf", f"scale={width}:-2",
+        "-f", "image2pipe", "-vcodec", "mjpeg", "-q:v", "4", "-",
+    ]
+    r = run_cmd(args, timeout=60)
+    if r.returncode != 0 or not r.stdout:
+        # 末尾フレーム付近で失敗した場合は少し手前を試す
+        args[3] = f"{max(0.0, t - 0.5):.3f}"
+        r = run_cmd(args, timeout=60)
+        if r.returncode != 0 or not r.stdout:
+            raise RuntimeError("フレーム抽出に失敗しました")
+    return r.stdout
+
+
+def unique_out_path(src_path, cropped, out_dir=None):
+    folder = out_dir if (out_dir and os.path.isdir(out_dir)) else os.path.dirname(src_path)
+    name = os.path.splitext(os.path.basename(src_path))[0]
+    suffix = "_crop" if cropped else "_conv"
+    out = os.path.join(folder, f"{name}{suffix}.mp4")
+    n = 2
+    while os.path.exists(out):
+        out = os.path.join(folder, f"{name}{suffix}{n}.mp4")
+        n += 1
+    return out
+
+
+def build_ffmpeg_args(src, out, crop, quality, encoder, fps_limit, has_audio=True):
+    """encoder: 'nvenc' or 'x264'"""
+    vf = []
+    if crop:
+        w = crop["w"] // 2 * 2
+        h = crop["h"] // 2 * 2
+        x = max(0, crop["x"])
+        y = max(0, crop["y"])
+        vf.append(f"crop={w}:{h}:{x}:{y}")
+    vf.append("format=yuv420p")
+
+    args = [FFMPEG, "-y", "-v", "error", "-progress", "pipe:1", "-nostats",
+            "-i", src, "-vf", ",".join(vf)]
+
+    if encoder == "nvenc":
+        cq = "23" if quality == "high" else "28"
+        args += ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr",
+                 "-cq", cq, "-b:v", "0", "-profile:v", "high"]
+    else:
+        crf = "20" if quality == "high" else "24"
+        args += ["-c:v", "libx264", "-preset", "fast", "-crf", crf,
+                 "-profile:v", "high"]
+
+    if fps_limit:
+        args += ["-r", str(fps_limit)]
+
+    if has_audio:
+        args += ["-c:a", "aac", "-b:a", "192k"]
+    args += ["-movflags", "+faststart", out]
+    return args
+
+
+def convert_worker(job_id):
+    with jobs_lock:
+        job = jobs[job_id]
+    src = job["src"]
+    crop = job["crop"]
+    quality = job["quality"]
+    duration = job["duration"] or 1
+
+    out = unique_out_path(src, bool(crop), job.get("out_dir"))
+    job["out"] = out
+
+    encoders = ["nvenc", "x264"] if (job["use_gpu"] and nvenc_available()) else ["x264"]
+    last_err = ""
+    for encoder in encoders:
+        job["encoder"] = encoder
+        args = build_ffmpeg_args(src, out, crop, quality, encoder,
+                                 job.get("fps_limit"), job["has_audio"])
+        try:
+            proc = subprocess.Popen(
+                args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            job["proc"] = proc
+            for raw in proc.stdout:
+                line = raw.decode("utf-8", "replace").strip()
+                if line.startswith("out_time_us=") or line.startswith("out_time_ms="):
+                    try:
+                        us = int(line.split("=")[1])
+                        job["percent"] = min(99, us / 1_000_000 / duration * 100)
+                    except ValueError:
+                        pass
+                if job.get("cancelled"):
+                    proc.kill()
+                    break
+            proc.wait()
+            if job.get("cancelled"):
+                job["state"] = "cancelled"
+                if os.path.exists(out):
+                    try:
+                        os.remove(out)
+                    except OSError:
+                        pass
+                return
+            if proc.returncode == 0:
+                job["percent"] = 100
+                job["state"] = "done"
+                job["out_size"] = os.path.getsize(out)
+                return
+            last_err = proc.stderr.read().decode("utf-8", "replace")[-800:]
+        except Exception as e:  # noqa: BLE001
+            last_err = str(e)
+        # NVENC失敗 → x264でリトライ
+        if os.path.exists(out):
+            try:
+                os.remove(out)
+            except OSError:
+                pass
+        job["percent"] = 0
+
+    job["state"] = "error"
+    job["error"] = last_err or "変換に失敗しました"
+
+
+def pick_file_dialog():
+    """tkinterのファイルダイアログを別プロセスで開く"""
+    code = (
+        "import tkinter as tk\n"
+        "from tkinter import filedialog\n"
+        "root = tk.Tk(); root.withdraw(); root.attributes('-topmost', True)\n"
+        "p = filedialog.askopenfilename(title='動画ファイルを選択', filetypes=["
+        "('動画ファイル', '*.mp4 *.mov *.m4v *.avi *.mkv *.mts *.m2ts *.mxf *.wmv *.webm'),"
+        "('すべてのファイル', '*.*')])\n"
+        "import sys; sys.stdout.buffer.write(p.encode('utf-8'))\n"
+    )
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                       timeout=300, creationflags=CREATE_NO_WINDOW)
+    return r.stdout.decode("utf-8", "replace").strip()
+
+
+def pick_files_dialog():
+    """複数ファイル選択ダイアログ (改行区切りで返す)"""
+    code = (
+        "import tkinter as tk\n"
+        "from tkinter import filedialog\n"
+        "root = tk.Tk(); root.withdraw(); root.attributes('-topmost', True)\n"
+        "p = filedialog.askopenfilenames(title='動画ファイルを選択 (複数選択OK)', filetypes=["
+        "('動画ファイル', '*.mp4 *.mov *.m4v *.avi *.mkv *.mts *.m2ts *.mxf *.wmv *.webm'),"
+        "('すべてのファイル', '*.*')])\n"
+        "import sys; sys.stdout.buffer.write('\\n'.join(p).encode('utf-8'))\n"
+    )
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                       timeout=300, creationflags=CREATE_NO_WINDOW)
+    out = r.stdout.decode("utf-8", "replace").strip()
+    return [p for p in out.split("\n") if p.strip()]
+
+
+def pick_dir_dialog():
+    """tkinterのフォルダ選択ダイアログを別プロセスで開く"""
+    code = (
+        "import tkinter as tk\n"
+        "from tkinter import filedialog\n"
+        "root = tk.Tk(); root.withdraw(); root.attributes('-topmost', True)\n"
+        "p = filedialog.askdirectory(title='出力先フォルダを選択')\n"
+        "import sys; sys.stdout.buffer.write(p.encode('utf-8'))\n"
+    )
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                       timeout=300, creationflags=CREATE_NO_WINDOW)
+    return r.stdout.decode("utf-8", "replace").strip().replace("/", "\\")
+
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def _json(self, obj, status=200):
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _read_body(self):
+        length = int(self.headers.get("Content-Length", 0))
+        return json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        route = parsed.path
+        q = urllib.parse.parse_qs(parsed.query)
+
+        if route == "/":
+            with open(os.path.join(APP_DIR, "index.html"), "rb") as f:
+                body = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        elif route == "/api/frame":
+            path = q.get("path", [""])[0]
+            t = float(q.get("t", ["0"])[0])
+            w = int(q.get("w", ["960"])[0])
+            try:
+                img = extract_frame(path, t, w)
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(len(img)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(img)
+            except Exception as e:  # noqa: BLE001
+                self._json({"error": str(e)}, 500)
+
+        elif route == "/api/caps":
+            self._json({
+                "nvenc": nvenc_available(),
+                "version": APP_VERSION,
+                "out_dir": load_config().get("out_dir"),
+            })
+
+        elif route == "/api/progress":
+            job_id = q.get("id", [""])[0]
+            with jobs_lock:
+                job = jobs.get(job_id)
+            if not job:
+                self._json({"error": "job not found"}, 404)
+                return
+            self._json({
+                "state": job["state"],
+                "percent": round(job.get("percent", 0), 1),
+                "encoder": job.get("encoder"),
+                "out": job.get("out"),
+                "out_size": job.get("out_size"),
+                "error": job.get("error"),
+            })
+        else:
+            self._json({"error": "not found"}, 404)
+
+    def do_POST(self):
+        route = urllib.parse.urlparse(self.path).path
+        try:
+            body = self._read_body()
+        except (ValueError, json.JSONDecodeError):
+            self._json({"error": "bad request"}, 400)
+            return
+
+        if route == "/api/pick":
+            try:
+                path = pick_file_dialog()
+                self._json({"path": path})
+            except Exception as e:  # noqa: BLE001
+                self._json({"error": str(e)}, 500)
+
+        elif route == "/api/pick-multi":
+            try:
+                self._json({"paths": pick_files_dialog()})
+            except Exception as e:  # noqa: BLE001
+                self._json({"error": str(e)}, 500)
+
+        elif route == "/api/pick-dir":
+            try:
+                path = pick_dir_dialog()
+                if path:
+                    cfg = load_config()
+                    cfg["out_dir"] = path
+                    save_config(cfg)
+                self._json({"path": path})
+            except Exception as e:  # noqa: BLE001
+                self._json({"error": str(e)}, 500)
+
+        elif route == "/api/set-out-dir":
+            # out_dir: null = 元ファイルと同じフォルダ
+            cfg = load_config()
+            cfg["out_dir"] = body.get("out_dir")
+            save_config(cfg)
+            self._json({"ok": True})
+
+        elif route == "/api/quit":
+            self._json({"ok": True})
+            threading.Timer(0.3, lambda: os._exit(0)).start()
+
+        elif route == "/api/probe":
+            path = (body.get("path") or "").strip().strip('"')
+            if not path or not os.path.isfile(path):
+                self._json({"error": f"ファイルが見つかりません: {path}"}, 400)
+                return
+            try:
+                self._json(probe_file(path))
+            except Exception as e:  # noqa: BLE001
+                self._json({"error": str(e)}, 500)
+
+        elif route == "/api/convert":
+            src = body.get("path")
+            if not src or not os.path.isfile(src):
+                self._json({"error": "ファイルが見つかりません"}, 400)
+                return
+            _job_counter[0] += 1
+            job_id = str(_job_counter[0])
+            job = {
+                "state": "running", "percent": 0,
+                "src": src,
+                "crop": body.get("crop"),
+                "quality": body.get("quality", "high"),
+                "use_gpu": bool(body.get("use_gpu", True)),
+                "duration": float(body.get("duration") or 0),
+                "has_audio": bool(body.get("has_audio", True)),
+                "fps_limit": body.get("fps_limit"),
+                "out_dir": load_config().get("out_dir"),
+            }
+            with jobs_lock:
+                jobs[job_id] = job
+            threading.Thread(target=convert_worker, args=(job_id,), daemon=True).start()
+            self._json({"id": job_id})
+
+        elif route == "/api/cancel":
+            job_id = body.get("id")
+            with jobs_lock:
+                job = jobs.get(job_id)
+            if job:
+                job["cancelled"] = True
+            self._json({"ok": True})
+
+        elif route == "/api/open-folder":
+            path = body.get("path", "")
+            if path and os.path.exists(path):
+                subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+                self._json({"ok": True})
+            else:
+                self._json({"error": "not found"}, 404)
+        else:
+            self._json({"error": "not found"}, 404)
+
+
+class Server(ThreadingHTTPServer):
+    # WindowsではSO_REUSEADDRだと同一ポートに二重バインドできてしまうため無効化
+    # (これで二重起動時に確実にOSErrorが出る)
+    allow_reuse_address = False
+
+
+def main():
+    url = f"http://127.0.0.1:{PORT}/"
+    try:
+        server = Server(("127.0.0.1", PORT), Handler)
+    except OSError:
+        # すでに起動中 → ブラウザだけ開いて終了 (二重起動対策)
+        webbrowser.open(url)
+        return
+    # アップデーターが確実にプロセスを特定できるようPIDを記録
+    try:
+        with open(os.path.join(APP_DIR, "server.pid"), "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+    except OSError:
+        pass
+    print(f"PATTI CROP v{APP_VERSION} 起動: {url}")
+    if "--no-browser" not in sys.argv:
+        threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()
