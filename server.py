@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 PORT = 8765
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 
 FFMPEG = "ffmpeg"

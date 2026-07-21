@@ -1,49 +1,53 @@
 ﻿# PATTI CROP アップデーター
-# ダウンロードフォルダの patti_crop*.zip を探して適用する
+# GitHubの最新リリース(固定URL)から取得して適用する。
+# 取得に失敗した場合のみ、ダウンロードフォルダ内の patti*crop*.zip を探すフォールバック。
 $ErrorActionPreference = 'Stop'
 function Fin($c) { [void](Read-Host 'Enterキーを押すと閉じます'); exit $c }
 
 $dir = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+# 参照先の固定URL(バージョンが上がっても不変)。repo_url.txt があればそちらを優先。
+$updateUrl = 'https://github.com/ikemotodir/patti-crop/releases/latest/download/patti_crop.zip'
+$repoUrlFile = Join-Path $dir 'repo_url.txt'
+if (Test-Path $repoUrlFile) {
+    $u = (Get-Content $repoUrlFile -Raw).Trim()
+    if ($u -match '^https?://') { $updateUrl = $u }
+}
 
 Write-Host '=============================================='
 Write-Host '   PATTI CROP アップデート'
 Write-Host '=============================================='
 Write-Host ''
 
-# (1/4) 最新版zipを入手
-# repo_url.txt があればGitHubから直接ダウンロード、なければダウンロードフォルダを探す
+# (1/4) 最新版zipを入手 --- 第一優先: GitHub固定URL / フォールバック: Downloadsフォルダ
 $zipPath = $null
 $fromDownloads = $false
-$repoUrlFile = Join-Path $dir 'repo_url.txt'
-if (Test-Path $repoUrlFile) {
-    $url = (Get-Content $repoUrlFile -Raw).Trim()
-    if ($url -match '^https?://') {
-        Write-Host '(1/4) GitHubから最新版をダウンロードしています...'
-        $tmpZip = Join-Path $env:TEMP 'patti_crop_latest.zip'
-        try { if (Test-Path $tmpZip) { Remove-Item $tmpZip -Force } } catch {}
-        cmd /c "curl.exe -L --fail -s -S -o `"$tmpZip`" `"$url`" 2>nul"
-        if ($LASTEXITCODE -eq 0 -and (Test-Path $tmpZip)) {
-            $zipPath = $tmpZip
-            Write-Host '  [OK] ダウンロード完了'
-        } else {
-            Write-Host '  ダウンロードできませんでした → ダウンロードフォルダのzipを探します'
-        }
-    }
+
+Write-Host '(1/4) GitHubから最新版をダウンロードしています...'
+$tmpZip = Join-Path $env:TEMP 'patti_crop_latest.zip'
+try { if (Test-Path $tmpZip) { Remove-Item $tmpZip -Force } } catch {}
+# --ssl-no-revoke: 一部環境でTLS失効チェックが通らずDLに失敗するのを回避
+cmd /c "curl.exe -L --ssl-no-revoke --fail -s -S -o `"$tmpZip`" `"$updateUrl`" 2>nul"
+if ($LASTEXITCODE -eq 0 -and (Test-Path $tmpZip) -and ((Get-Item $tmpZip).Length -gt 0)) {
+    $zipPath = $tmpZip
+    Write-Host '  [OK] ダウンロード完了'
+} else {
+    Write-Host '  GitHubから取得できませんでした → ダウンロードフォルダのzipを探します'
 }
+
 if ($null -eq $zipPath) {
-    Write-Host '(1/4) ダウンロードフォルダからzipを探しています...'
     $downloads = Join-Path $env:USERPROFILE 'Downloads'
     $zip = Get-ChildItem -Path (Join-Path $downloads 'patti*crop*.zip') -ErrorAction SilentlyContinue |
            Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if ($null -eq $zip) {
         Write-Host ''
         Write-Host '[エラー] アップデート用のzipが見つかりませんでした。'
-        Write-Host '配布ページからzipをダウンロードしてから、もう一度実行してね。'
+        Write-Host 'ネット接続を確認するか、配布ページのzipをダウンロードフォルダに入れて、もう一度実行してね。'
         Fin 1
     }
     $zipPath = $zip.FullName
     $fromDownloads = $true
-    Write-Host ('  見つかった: ' + $zip.Name)
+    Write-Host ('  ダウンロードフォルダで発見: ' + $zip.Name)
 }
 
 # (2/4) 起動中のPATTI CROPを終了 (server.pid のPIDで確実に特定)
