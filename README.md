@@ -12,15 +12,14 @@ by STUDIO PATTI
 
 ## インストール（初回だけ）
 
-1. このページの緑の **「Code」→「Download ZIP」** でダウンロード
+**Python等のインストールは不要です**（アプリに同梱済み）。
+
+1. 配布ページの **ダウンロード** ボタンから zip を入手
 2. zipを右クリック →「すべて展開」で好きな場所に展開（例: ドキュメント）
 3. 展開したフォルダの **`setup.bat`** をダブルクリック
-   - Python・ffmpegのチェックと、デスクトップショートカットの作成を自動でやります
-   - ffmpegが無い場合は自動インストールを試みます（数分かかります）
-4. 完了すると自動でアプリが起動します
-
-> **Pythonが入っていない場合**: https://www.python.org/downloads/ からインストールしてください。
-> インストール画面で **「Add python.exe to PATH」に必ずチェック** を入れること！
+   - デスクトップにショートカットを作り、アプリを起動します
+4. **初回起動時だけ**、動画の変換エンジン（ffmpeg・約100MB）を自動ダウンロードします。
+   画面に進捗バーが出るので、そのまま待つだけ（次回以降は出ません）
 
 ## 使い方
 
@@ -58,9 +57,9 @@ NVIDIA GPU + ドライバ570以降なら高速エンコードで一気に速く�
 
 ## 動作環境
 
-- Windows 10 / 11
-- Python 3.x（無料・上記参照）
-- ffmpeg（無料・setup.batが自動インストール）
+- **Windows 10 / 11**（Macやスマホでは動きません）
+- **最初の1回だけインターネット接続**（変換エンジンの自動取得に使用）
+- Python等の事前インストールは不要（同梱）
 - NVIDIA GPU搭載PCならGPU高速エンコード対応（ドライバ570以降。無くてもCPUで動きます）
 
 ## 注意事項
@@ -75,18 +74,22 @@ NVIDIA GPU + ドライバ570以降なら高速エンコードで一気に速く�
 |---|---|
 | `server.py` | ローカルHTTPサーバー本体（Python標準ライブラリのみ・外部送信なし） |
 | `index.html` | UI |
-| `PattiCrop.vbs` | 無音起動ランチャー（ショートカットの実体） |
-| `setup.bat` / `setup.ps1` | 初回セットアップ |
+| `python/` | 同梱の埋め込みPython（インストール不要にするため。配布zipに含む／リポジトリには含めない） |
+| `ffmpeg/` | 初回起動時に自動DLされる変換エンジン（実行時に生成／リポジトリ・配布zipには含めない） |
+| `PattiCrop.vbs` | 無音起動ランチャー（ショートカットの実体・ASCIIのみ） |
+| `setup.bat` / `setup.ps1` | 初回セットアップ（ショートカット作成＋起動） |
 | `update.bat` / `update.ps1` | ワンクリックアップデーター |
 | `create_shortcut.bat` | ショートカット再作成 |
 | `PATTI_CROP.bat` | コンソール表示付き起動（デバッグ用） |
-| `repo_url.txt` | アップデートのダウンロード元URL |
+| `repo_url.txt` | アップデートのダウンロード元URL（リリース資産の固定URL） |
 | `config.json` / `server.pid` | 実行時に自動生成（リポジトリには含めない） |
 
-※ 完全ローカル動作。動画がネットにアップロードされることはありません。
+※ 完全ローカル動作。動画がネットにアップロードされることはありません
+（通信は初回のffmpeg取得と、update.bat実行時の更新取得のみ）。
 
 ### 更新版の出し方（メンテナ用メモ）
 
-`server.py` の `APP_VERSION` を上げて main ブランチにpushするだけ。
-利用者の update.bat が `repo_url.txt` のURL（mainブランチのzip）を取得して適用する。
-.batはASCIIのみ（cmdはUTF-8日本語を化かす）、日本語メッセージはBOM付きUTF-8の.ps1に書くこと。
+`server.py` の `APP_VERSION` を上げ、`python/` を同梱した `patti_crop.zip` を作成し、
+GitHub Release の資産として差し替える（固定URL: releases/latest/download/patti_crop.zip）。
+利用者の update.bat がこの固定URLから取得して適用する（ffmpeg/config.jsonは保持）。
+.bat・.vbs はASCIIのみ（cmd/wscriptはUTF-8日本語を化かす）、日本語メッセージはBOM付きUTF-8の.ps1に書くこと。

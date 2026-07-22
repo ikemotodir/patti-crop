@@ -86,9 +86,13 @@ if ($null -eq $src) {
     Fin 1
 }
 
-# (4/4) 上書きコピー (設定ファイルと実行中のアップデーターは保護)
+# (4/4) 上書きコピー
+#   /XF: 実行中のupdate.bat・ユーザー設定config.json・server.pidは上書きしない
+#   /XD ffmpeg: DL済みの動画エンジン(約80MB)は消さない=更新のたびに再DLさせない
+#   /R:2 /W:2: 万一ロック中でも無限リトライで固まらないようにする
 Write-Host '(4/4) ファイルを更新しています...'
-robocopy $src $dir /E /XF update.bat config.json server.pid | Out-Null
+$ffdir = Join-Path $dir 'ffmpeg'
+robocopy $src $dir /E /R:2 /W:2 /XF update.bat config.json server.pid /XD $ffdir | Out-Null
 if ($LASTEXITCODE -ge 8) {
     Write-Host '[エラー] ファイルの上書きに失敗しました。'
     Fin 1

@@ -207,6 +207,23 @@
     font-size: 12px; color: var(--warn); white-space: pre-wrap; word-break: break-all;
   }
   .hidden { display: none !important; }
+
+  /* ffmpeg初回セットアップ オーバーレイ */
+  #ffOverlay {
+    position: fixed; inset: 0; z-index: 1000;
+    background: rgba(13,17,23,.97);
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  #ffOverlay .box {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; padding: 30px 34px; max-width: 540px; width: 100%; text-align: center;
+  }
+  #ffOverlay h2 { font-size: 18px; color: var(--accent); margin-bottom: 10px; }
+  #ffOverlay .desc { font-size: 13px; color: var(--sub); line-height: 1.9; margin-bottom: 20px; }
+  #ffBar { height: 16px; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  #ffBarInner { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .3s; }
+  #ffMsg { font-size: 12px; color: var(--text); margin-top: 12px; min-height: 16px; white-space: pre-wrap; line-height: 1.7; }
+  #ffRetry { margin-top: 16px; }
 </style>
 </head>
 <body>
@@ -339,6 +356,22 @@
   </div>
 
 </main>
+
+<!-- 初回セットアップ (ffmpeg自動ダウンロード) -->
+<div id="ffOverlay" class="hidden">
+  <div class="box">
+    <h2>🎬 初回セットアップ</h2>
+    <div class="desc">
+      PATTI CROP を使うために、動画の変換エンジン（ffmpeg・約80MB）を<br>
+      <b>一度だけ</b>ダウンロードします。次回からはこの画面は出ません。<br>
+      回線により数分かかることがあります。そのままお待ちください。
+    </div>
+    <div id="ffBar"><div id="ffBarInner"></div></div>
+    <div id="ffMsg">準備しています...</div>
+    <button id="ffRetry" class="hidden">もう一度試す</button>
+  </div>
+</div>
+
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
@@ -357,8 +390,9 @@ let jobId = null;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// 起動時: GPU可否・バージョン・保存済み出力先を反映
-fetch("/api/caps").then(r => r.json()).then(c => {
+// ---- 起動フロー: ffmpeg準備 → 各種設定反映 ----
+function applyCaps(c) {
+  if (!c) return;
   if (!c.nvenc) {
     $("gpuCheck").checked = false;
     $("gpuCheck").disabled = true;
@@ -370,7 +404,45 @@ fetch("/api/caps").then(r => r.json()).then(c => {
     $("outDirRow").classList.remove("hidden");
     $("outDirLabel").textContent = c.out_dir;
   }
-});
+}
+
+function ensureFfmpeg() {
+  return new Promise((resolve) => {
+    $("ffOverlay").classList.remove("hidden");
+    fetch("/api/ffmpeg-download", { method: "POST", body: "{}" }).catch(() => {});
+    $("ffRetry").onclick = () => {
+      $("ffRetry").classList.add("hidden");
+      $("ffMsg").textContent = "再試行しています...";
+      fetch("/api/ffmpeg-download", { method: "POST", body: "{}" }).catch(() => {});
+    };
+    const poll = setInterval(async () => {
+      let p;
+      try { p = await fetch("/api/ffmpeg-progress").then(r => r.json()); } catch (e) { return; }
+      $("ffBarInner").style.width = (p.percent || 0) + "%";
+      $("ffMsg").textContent = p.message || "";
+      if (p.ready) {
+        clearInterval(poll);
+        $("ffOverlay").classList.add("hidden");
+        resolve();
+      } else if (p.state === "error") {
+        $("ffRetry").classList.remove("hidden");
+      } else {
+        $("ffRetry").classList.add("hidden");
+      }
+    }, 700);
+  });
+}
+
+async function initApp() {
+  let caps = await fetch("/api/caps").then(r => r.json()).catch(() => ({}));
+  if (caps.version) $("verLabel").textContent = "v" + caps.version;
+  if (!caps.ffmpeg_ready) {
+    await ensureFfmpeg();
+    caps = await fetch("/api/caps").then(r => r.json()).catch(() => ({}));
+  }
+  applyCaps(caps);
+}
+initApp();
 
 // ---------- ファイル追加 ----------
 $("pickBtn").onclick = async () => {

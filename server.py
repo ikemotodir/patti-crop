@@ -1,26 +1,39 @@
 # -*- coding: utf-8 -*-
 """
-PATTI CROP - 動画クロップ&変換アプリ
-ローカルHTTPサーバー (Python標準ライブラリのみ)
+PATTI CROP - 動画クロップ&変換アプリ (ポータブル版)
+ローカルHTTPサーバー。Python標準ライブラリのみ。
+ffmpegは同梱せず、初回起動時に自動ダウンロードして ffmpeg/ に常駐させる。
 """
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
 import webbrowser
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 PORT = 8765
-APP_VERSION = "1.3.2"
+APP_VERSION = "1.4.0"
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 
-FFMPEG = "ffmpeg"
-FFPROBE = "ffprobe"
+# ffmpegは同梱しない。初回DLで ffmpeg/bin/ に常駐させる
+FFMPEG_DIR = os.path.join(APP_DIR, "ffmpeg")
+FFMPEG_BIN = os.path.join(FFMPEG_DIR, "bin")
+FFMPEG = os.path.join(FFMPEG_BIN, "ffmpeg.exe")
+FFPROBE = os.path.join(FFMPEG_BIN, "ffprobe.exe")
+
+# ダウンロード元 (第一優先: GitHub CDNで安定 / フォールバック: gyan.dev)
+FFMPEG_URLS = [
+    "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip",
+    "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
+]
 
 # Windowsでコンソールウィンドウを出さない
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
@@ -30,7 +43,145 @@ jobs_lock = threading.Lock()
 _job_counter = [0]
 _nvenc_cache = [None]  # None=未判定, True/False
 
+# ffmpeg自動ダウンロードの状態
+ffmpeg_dl = {"state": "idle", "percent": 0, "message": ""}
+_ffmpeg_dl_lock = threading.Lock()
 
+
+def run_cmd(args, timeout=None):
+    return subprocess.run(
+        args, capture_output=True, timeout=timeout,
+        creationflags=CREATE_NO_WINDOW,
+    )
+
+
+# ------------------------------------------------------------------
+# ffmpeg 自動ダウンロード
+# ------------------------------------------------------------------
+def ffmpeg_ready():
+    return os.path.isfile(FFMPEG) and os.path.isfile(FFPROBE)
+
+
+def _remote_size(url):
+    try:
+        r = run_cmd(["curl.exe", "-sIL", "--ssl-no-revoke", url], timeout=30)
+        text = r.stdout.decode("utf-8", "replace")
+        sizes = re.findall(r"(?i)content-length:\s*(\d+)", text)
+        return int(sizes[-1]) if sizes else 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _extract_ffmpeg(zip_path):
+    os.makedirs(FFMPEG_BIN, exist_ok=True)
+    with zipfile.ZipFile(zip_path) as z:
+        want = {}
+        for n in z.namelist():
+            base = n.replace("\\", "/").split("/")[-1].lower()
+            if base in ("ffmpeg.exe", "ffprobe.exe") and base not in want:
+                want[base] = n
+        if "ffmpeg.exe" not in want or "ffprobe.exe" not in want:
+            raise RuntimeError("zip内にffmpeg.exe/ffprobe.exeが見つかりません")
+        for base, n in want.items():
+            dst = os.path.join(FFMPEG_BIN, base)
+            with z.open(n) as srcf, open(dst, "wb") as dstf:
+                shutil.copyfileobj(srcf, dstf)
+
+
+def _ffmpeg_dl_worker():
+    tmp = os.path.join(tempfile.gettempdir(), "patti_crop_ffmpeg.zip")
+    last_err = ""
+    got = False
+    for i, url in enumerate(FFMPEG_URLS):
+        ffmpeg_dl["message"] = ("動画エンジンをダウンロードしています..." if i == 0
+                                else "別のサーバーから再取得しています...")
+        ffmpeg_dl["percent"] = 0
+        total = _remote_size(url)
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        try:
+            proc = subprocess.Popen(
+                ["curl.exe", "-L", "--ssl-no-revoke", "--fail",
+                 "-C", "-",                          # 途中から再開 (リトライ時)
+                 "--connect-timeout", "30",
+                 "--speed-time", "20", "--speed-limit", "20000",  # 20秒間20KB/s未満なら中断
+                 "--retry", "3", "--retry-delay", "3",            # 失速/一時エラーは自動再試行
+                 "-o", tmp, url],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                creationflags=CREATE_NO_WINDOW,
+            )
+        except FileNotFoundError:
+            last_err = "curl.exe が見つかりません (Windows 10/11 標準の機能です)"
+            break
+        while proc.poll() is None:
+            time.sleep(0.5)
+            try:
+                cur = os.path.getsize(tmp) if os.path.exists(tmp) else 0
+            except OSError:
+                cur = 0
+            if total > 0:
+                ffmpeg_dl["percent"] = min(95, round(cur / total * 100, 1))
+                ffmpeg_dl["message"] = f"動画エンジンをダウンロード中... {cur // 1000000}MB / {total // 1000000}MB"
+            else:
+                ffmpeg_dl["message"] = f"動画エンジンをダウンロード中... {cur // 1000000}MB"
+        if proc.returncode == 0 and os.path.exists(tmp) and os.path.getsize(tmp) > 1000000:
+            got = True
+            break
+        try:
+            last_err = proc.stderr.read().decode("utf-8", "replace")[-300:]
+        except Exception:  # noqa: BLE001
+            last_err = ""
+
+    if not got:
+        ffmpeg_dl.update(state="error", percent=0, message=(
+            "動画エンジンのダウンロードに失敗しました。\n"
+            "・インターネットに接続されているか確認してください\n"
+            "・接続を確認したら、アプリをいったん閉じて開き直してください\n"
+            f"（技術的な詳細: {last_err or '不明なエラー'}）"
+        ))
+        return
+
+    ffmpeg_dl.update(percent=96, message="展開しています...")
+    try:
+        _extract_ffmpeg(tmp)
+    except Exception as e:  # noqa: BLE001
+        ffmpeg_dl.update(state="error", percent=0, message=(
+            "動画エンジンの展開に失敗しました。\n"
+            "・ディスクの空き容量を確認してください\n"
+            "・アプリを閉じて開き直してください\n"
+            f"（技術的な詳細: {e}）"
+        ))
+        return
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
+
+    if ffmpeg_ready():
+        ffmpeg_dl.update(state="ready", percent=100, message="準備完了！")
+    else:
+        ffmpeg_dl.update(state="error", percent=0, message=(
+            "動画エンジンの配置に失敗しました。アプリを閉じて開き直してみてください。"
+        ))
+
+
+def start_ffmpeg_download():
+    with _ffmpeg_dl_lock:
+        if ffmpeg_ready():
+            ffmpeg_dl.update(state="ready", percent=100, message="準備完了！")
+            return
+        if ffmpeg_dl["state"] == "downloading":
+            return  # 既に実行中
+        ffmpeg_dl.update(state="downloading", percent=0, message="動画エンジンを準備しています...")
+        threading.Thread(target=_ffmpeg_dl_worker, daemon=True).start()
+
+
+# ------------------------------------------------------------------
+# 変換まわり
+# ------------------------------------------------------------------
 def nvenc_available():
     if _nvenc_cache[0] is None:
         try:
@@ -56,13 +207,6 @@ def load_config():
 def save_config(cfg):
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
-
-
-def run_cmd(args, timeout=None):
-    return subprocess.run(
-        args, capture_output=True, timeout=timeout,
-        creationflags=CREATE_NO_WINDOW,
-    )
 
 
 def probe_file(path):
@@ -270,53 +414,82 @@ def convert_worker(job_id):
     job["error"] = last_err or "変換に失敗しました"
 
 
+# ------------------------------------------------------------------
+# ファイル選択ダイアログ (PowerShell標準ダイアログ。tkinter不使用)
+# ------------------------------------------------------------------
+_PS_OWNER = (
+    "Add-Type -AssemblyName System.Windows.Forms\n"
+    "Add-Type -AssemblyName System.Drawing\n"
+    "$owner = New-Object System.Windows.Forms.Form\n"
+    "$owner.TopMost = $true; $owner.ShowInTaskbar = $false\n"
+    "$owner.StartPosition = 'Manual'\n"
+    "$owner.Location = New-Object System.Drawing.Point(-3000,-3000)\n"
+    "$owner.Size = New-Object System.Drawing.Size(1,1)\n"
+    "$owner.Show(); $owner.Activate()\n"
+)
+_FILTER = ("動画ファイル|*.mp4;*.mov;*.m4v;*.avi;*.mkv;*.mts;*.m2ts;*.mxf;*.wmv;*.webm|"
+           "すべてのファイル (*.*)|*.*")
+
+
+def _run_ps_dialog(ps_body):
+    # PowerShellをSTAで起動しWindows Formsダイアログを開く。
+    # 日本語を確実に扱うため一時.ps1(UTF-8 BOM)に書いて -File で実行、出力もUTF-8。
+    script = ("[Console]::OutputEncoding=[System.Text.Encoding]::UTF8\r\n"
+              + _PS_OWNER + ps_body)
+    fd, path = tempfile.mkstemp(suffix=".ps1")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(b"\xef\xbb\xbf")
+            f.write(script.replace("\n", "\r\n").encode("utf-8"))
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File", path],
+            capture_output=True, timeout=600, creationflags=CREATE_NO_WINDOW,
+        )
+        return r.stdout.decode("utf-8", "replace")
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 def pick_file_dialog():
-    """tkinterのファイルダイアログを別プロセスで開く"""
-    code = (
-        "import tkinter as tk\n"
-        "from tkinter import filedialog\n"
-        "root = tk.Tk(); root.withdraw(); root.attributes('-topmost', True)\n"
-        "p = filedialog.askopenfilename(title='動画ファイルを選択', filetypes=["
-        "('動画ファイル', '*.mp4 *.mov *.m4v *.avi *.mkv *.mts *.m2ts *.mxf *.wmv *.webm'),"
-        "('すべてのファイル', '*.*')])\n"
-        "import sys; sys.stdout.buffer.write(p.encode('utf-8'))\n"
+    ps = (
+        "$d = New-Object System.Windows.Forms.OpenFileDialog\n"
+        "$d.Title = '動画ファイルを選択'\n"
+        f"$d.Filter = '{_FILTER}'\n"
+        "$r = $d.ShowDialog($owner); $owner.Close()\n"
+        "if ($r -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.FileName) }\n"
     )
-    r = subprocess.run([sys.executable, "-c", code], capture_output=True,
-                       timeout=300, creationflags=CREATE_NO_WINDOW)
-    return r.stdout.decode("utf-8", "replace").strip()
+    return _run_ps_dialog(ps).strip()
 
 
 def pick_files_dialog():
-    """複数ファイル選択ダイアログ (改行区切りで返す)"""
-    code = (
-        "import tkinter as tk\n"
-        "from tkinter import filedialog\n"
-        "root = tk.Tk(); root.withdraw(); root.attributes('-topmost', True)\n"
-        "p = filedialog.askopenfilenames(title='動画ファイルを選択 (複数選択OK)', filetypes=["
-        "('動画ファイル', '*.mp4 *.mov *.m4v *.avi *.mkv *.mts *.m2ts *.mxf *.wmv *.webm'),"
-        "('すべてのファイル', '*.*')])\n"
-        "import sys; sys.stdout.buffer.write('\\n'.join(p).encode('utf-8'))\n"
+    ps = (
+        "$d = New-Object System.Windows.Forms.OpenFileDialog\n"
+        "$d.Title = '動画ファイルを選択 (複数選択OK)'\n"
+        "$d.Multiselect = $true\n"
+        f"$d.Filter = '{_FILTER}'\n"
+        "$r = $d.ShowDialog($owner); $owner.Close()\n"
+        "if ($r -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write(($d.FileNames -join \"`n\")) }\n"
     )
-    r = subprocess.run([sys.executable, "-c", code], capture_output=True,
-                       timeout=300, creationflags=CREATE_NO_WINDOW)
-    out = r.stdout.decode("utf-8", "replace").strip()
+    out = _run_ps_dialog(ps).strip()
     return [p for p in out.split("\n") if p.strip()]
 
 
 def pick_dir_dialog():
-    """tkinterのフォルダ選択ダイアログを別プロセスで開く"""
-    code = (
-        "import tkinter as tk\n"
-        "from tkinter import filedialog\n"
-        "root = tk.Tk(); root.withdraw(); root.attributes('-topmost', True)\n"
-        "p = filedialog.askdirectory(title='出力先フォルダを選択')\n"
-        "import sys; sys.stdout.buffer.write(p.encode('utf-8'))\n"
+    ps = (
+        "$d = New-Object System.Windows.Forms.FolderBrowserDialog\n"
+        "$d.Description = '出力先フォルダを選択'\n"
+        "$r = $d.ShowDialog($owner); $owner.Close()\n"
+        "if ($r -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.SelectedPath) }\n"
     )
-    r = subprocess.run([sys.executable, "-c", code], capture_output=True,
-                       timeout=300, creationflags=CREATE_NO_WINDOW)
-    return r.stdout.decode("utf-8", "replace").strip().replace("/", "\\")
+    return _run_ps_dialog(ps).strip()
 
 
+# ------------------------------------------------------------------
+# HTTP
+# ------------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -348,6 +521,9 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
         elif route == "/api/frame":
+            if not ffmpeg_ready():
+                self._json({"error": "動画エンジンの準備が完了していません"}, 503)
+                return
             path = q.get("path", [""])[0]
             t = float(q.get("t", ["0"])[0])
             w = int(q.get("w", ["960"])[0])
@@ -363,10 +539,20 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": str(e)}, 500)
 
         elif route == "/api/caps":
+            ready = ffmpeg_ready()
             self._json({
-                "nvenc": nvenc_available(),
+                "ffmpeg_ready": ready,
+                "nvenc": nvenc_available() if ready else False,
                 "version": APP_VERSION,
                 "out_dir": load_config().get("out_dir"),
+            })
+
+        elif route == "/api/ffmpeg-progress":
+            self._json({
+                "state": ffmpeg_dl["state"],
+                "percent": ffmpeg_dl["percent"],
+                "message": ffmpeg_dl["message"],
+                "ready": ffmpeg_ready(),
             })
 
         elif route == "/api/progress":
@@ -395,7 +581,11 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "bad request"}, 400)
             return
 
-        if route == "/api/pick":
+        if route == "/api/ffmpeg-download":
+            start_ffmpeg_download()
+            self._json({"ok": True})
+
+        elif route == "/api/pick":
             try:
                 path = pick_file_dialog()
                 self._json({"path": path})
@@ -431,6 +621,9 @@ class Handler(BaseHTTPRequestHandler):
             threading.Timer(0.3, lambda: os._exit(0)).start()
 
         elif route == "/api/probe":
+            if not ffmpeg_ready():
+                self._json({"error": "動画エンジンの準備が完了していません"}, 503)
+                return
             path = (body.get("path") or "").strip().strip('"')
             if not path or not os.path.isfile(path):
                 self._json({"error": f"ファイルが見つかりません: {path}"}, 400)
@@ -441,6 +634,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": str(e)}, 500)
 
         elif route == "/api/convert":
+            if not ffmpeg_ready():
+                self._json({"error": "動画エンジンの準備が完了していません"}, 503)
+                return
             src = body.get("path")
             if not src or not os.path.isfile(src):
                 self._json({"error": "ファイルが見つかりません"}, 400)
@@ -490,10 +686,17 @@ class Server(ThreadingHTTPServer):
 
 def main():
     url = f"http://127.0.0.1:{PORT}/"
-    try:
-        server = Server(("127.0.0.1", PORT), Handler)
-    except OSError:
-        # すでに起動中 → ブラウザだけ開いて終了 (二重起動対策)
+    # ポートバインドを数秒リトライする。
+    # ・アップデート直後の再起動: 旧プロセスのポート解放待ちを吸収して確実に起動
+    # ・本当に二重起動: 数秒粘っても空かない → 既存インスタンスとみなしブラウザだけ開く
+    server = None
+    for _ in range(8):
+        try:
+            server = Server(("127.0.0.1", PORT), Handler)
+            break
+        except OSError:
+            time.sleep(0.5)
+    if server is None:
         webbrowser.open(url)
         return
     # アップデーターが確実にプロセスを特定できるようPIDを記録
@@ -502,6 +705,11 @@ def main():
             f.write(str(os.getpid()))
     except OSError:
         pass
+    # ffmpegが未取得なら起動と同時にダウンロード開始 (UIも進捗を表示する)
+    if ffmpeg_ready():
+        ffmpeg_dl.update(state="ready", percent=100, message="準備完了！")
+    else:
+        start_ffmpeg_download()
     print(f"PATTI CROP v{APP_VERSION} 起動: {url}")
     if "--no-browser" not in sys.argv:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
