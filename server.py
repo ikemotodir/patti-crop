@@ -20,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 PORT = 8765
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 
 # ffmpegは同梱しない。初回DLで ffmpeg/bin/ に常駐させる
@@ -417,30 +417,72 @@ def convert_worker(job_id):
 # ------------------------------------------------------------------
 # ファイル選択ダイアログ (PowerShell標準ダイアログ。tkinter不使用)
 # ------------------------------------------------------------------
-_PS_OWNER = (
-    "Add-Type -AssemblyName System.Windows.Forms\n"
-    "Add-Type -AssemblyName System.Drawing\n"
-    "$owner = New-Object System.Windows.Forms.Form\n"
-    "$owner.TopMost = $true; $owner.ShowInTaskbar = $false\n"
-    "$owner.StartPosition = 'Manual'\n"
-    "$owner.Location = New-Object System.Drawing.Point(-3000,-3000)\n"
-    "$owner.Size = New-Object System.Drawing.Size(1,1)\n"
-    "$owner.Show(); $owner.Activate()\n"
-)
 _FILTER = ("動画ファイル|*.mp4;*.mov;*.m4v;*.avi;*.mkv;*.mts;*.m2ts;*.mxf;*.wmv;*.webm|"
            "すべてのファイル (*.*)|*.*")
+
+# ダイアログを確実に最前面に出すための前置きスクリプト。
+# TopMostのダミーフォームをオーナーにし、SetForegroundWindow等(P/Invoke)で
+# 複数手段を併用してフォアグラウンド化する。これをオーナーにShowDialogを呼ぶ。
+_PS_PREFIX = r'''[Console]::OutputEncoding=[System.Text.Encoding]::UTF8
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+try {
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class PcFg {
+  [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
+  [DllImport("user32.dll")] static extern bool AttachThreadInput(uint a, uint b, bool f);
+  [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr h);
+  [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int n);
+  [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int cx, int cy, uint f);
+  [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll")] static extern void keybd_event(byte v, byte s, uint f, IntPtr e);
+  public static void Force(IntPtr h) {
+    try { keybd_event(0x12,0,0,IntPtr.Zero); keybd_event(0x12,0,2,IntPtr.Zero); } catch {}
+    IntPtr fg = GetForegroundWindow();
+    uint pp; uint ft = GetWindowThreadProcessId(fg, out pp);
+    uint mt = GetCurrentThreadId();
+    AttachThreadInput(mt, ft, true);
+    SetWindowPos(h, new IntPtr(-1), 0, 0, 0, 0, 0x0003);
+    ShowWindow(h, 5);
+    BringWindowToTop(h);
+    SetForegroundWindow(h);
+    AttachThreadInput(mt, ft, false);
+  }
+}
+"@
+} catch {}
+function Show-Front($dlg) {
+  $owner = New-Object System.Windows.Forms.Form
+  $owner.FormBorderStyle = 'None'
+  $owner.ShowInTaskbar = $false
+  $owner.TopMost = $true
+  $owner.Size = New-Object System.Drawing.Size(1,1)
+  $owner.StartPosition = 'Manual'
+  $owner.Location = New-Object System.Drawing.Point(0,0)
+  $owner.Add_Shown({ try { $owner.Activate(); [PcFg]::Force($owner.Handle) } catch {} })
+  $owner.Show()
+  [System.Windows.Forms.Application]::DoEvents()
+  try { [PcFg]::Force($owner.Handle) } catch {}
+  $r = $dlg.ShowDialog($owner)
+  $owner.Close(); $owner.Dispose()
+  return $r
+}
+'''
 
 
 def _run_ps_dialog(ps_body):
     # PowerShellをSTAで起動しWindows Formsダイアログを開く。
     # 日本語を確実に扱うため一時.ps1(UTF-8 BOM)に書いて -File で実行、出力もUTF-8。
-    script = ("[Console]::OutputEncoding=[System.Text.Encoding]::UTF8\r\n"
-              + _PS_OWNER + ps_body)
+    script = _PS_PREFIX + ps_body
     fd, path = tempfile.mkstemp(suffix=".ps1")
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(b"\xef\xbb\xbf")
-            f.write(script.replace("\n", "\r\n").encode("utf-8"))
+            f.write(script.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
         r = subprocess.run(
             ["powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File", path],
             capture_output=True, timeout=600, creationflags=CREATE_NO_WINDOW,
@@ -458,7 +500,7 @@ def pick_file_dialog():
         "$d = New-Object System.Windows.Forms.OpenFileDialog\n"
         "$d.Title = '動画ファイルを選択'\n"
         f"$d.Filter = '{_FILTER}'\n"
-        "$r = $d.ShowDialog($owner); $owner.Close()\n"
+        "$r = Show-Front $d\n"
         "if ($r -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.FileName) }\n"
     )
     return _run_ps_dialog(ps).strip()
@@ -470,7 +512,7 @@ def pick_files_dialog():
         "$d.Title = '動画ファイルを選択 (複数選択OK)'\n"
         "$d.Multiselect = $true\n"
         f"$d.Filter = '{_FILTER}'\n"
-        "$r = $d.ShowDialog($owner); $owner.Close()\n"
+        "$r = Show-Front $d\n"
         "if ($r -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write(($d.FileNames -join \"`n\")) }\n"
     )
     out = _run_ps_dialog(ps).strip()
@@ -481,7 +523,7 @@ def pick_dir_dialog():
     ps = (
         "$d = New-Object System.Windows.Forms.FolderBrowserDialog\n"
         "$d.Description = '出力先フォルダを選択'\n"
-        "$r = $d.ShowDialog($owner); $owner.Close()\n"
+        "$r = Show-Front $d\n"
         "if ($r -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.SelectedPath) }\n"
     )
     return _run_ps_dialog(ps).strip()
