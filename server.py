@@ -2,6 +2,7 @@
 """
 PATTI CROP - 動画クロップ&変換アプリ (ポータブル版)
 ローカルHTTPサーバー。Python標準ライブラリのみ。
+ファイル選択はブラウザ内で完結（OSダイアログ不使用）。
 ffmpegは同梱せず、初回起動時に自動ダウンロードして ffmpeg/ に常駐させる。
 """
 import json
@@ -14,13 +15,14 @@ import tempfile
 import threading
 import time
 import urllib.parse
+import urllib.request
 import webbrowser
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 PORT = 8765
-APP_VERSION = "1.4.1"
+APP_VERSION = "1.5.0"
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 
 # ffmpegは同梱しない。初回DLで ffmpeg/bin/ に常駐させる
@@ -35,6 +37,9 @@ FFMPEG_URLS = [
     "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
 ]
 
+VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".mts",
+              ".m2ts", ".mxf", ".wmv", ".webm"}
+
 # Windowsでコンソールウィンドウを出さない
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
@@ -47,12 +52,29 @@ _nvenc_cache = [None]  # None=未判定, True/False
 ffmpeg_dl = {"state": "idle", "percent": 0, "message": ""}
 _ffmpeg_dl_lock = threading.Lock()
 
+# 「送る」で渡されたファイル (ブラウザが /api/pending で回収する)
+pending_files = []
+pending_lock = threading.Lock()
+
 
 def run_cmd(args, timeout=None):
     return subprocess.run(
         args, capture_output=True, timeout=timeout,
         creationflags=CREATE_NO_WINDOW,
     )
+
+
+def load_config():
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_config(cfg):
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
 
 
 # ------------------------------------------------------------------
@@ -105,10 +127,10 @@ def _ffmpeg_dl_worker():
         try:
             proc = subprocess.Popen(
                 ["curl.exe", "-L", "--ssl-no-revoke", "--fail",
-                 "-C", "-",                          # 途中から再開 (リトライ時)
+                 "-C", "-",
                  "--connect-timeout", "30",
-                 "--speed-time", "20", "--speed-limit", "20000",  # 20秒間20KB/s未満なら中断
-                 "--retry", "3", "--retry-delay", "3",            # 失速/一時エラーは自動再試行
+                 "--speed-time", "20", "--speed-limit", "20000",
+                 "--retry", "3", "--retry-delay", "3",
                  "-o", tmp, url],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 creationflags=CREATE_NO_WINDOW,
@@ -180,6 +202,56 @@ def start_ffmpeg_download():
 
 
 # ------------------------------------------------------------------
+# フォルダブラウズ (ブラウザ内ファイル選択)
+# ------------------------------------------------------------------
+def known_folders():
+    home = os.path.expanduser("~")
+    specs = [
+        ("デスクトップ", ["Desktop", os.path.join("OneDrive", "Desktop"),
+                       os.path.join("OneDrive - Personal", "Desktop")]),
+        ("ダウンロード", ["Downloads"]),
+        ("ビデオ", ["Videos"]),
+        ("ドキュメント", ["Documents", os.path.join("OneDrive", "Documents")]),
+    ]
+    out = []
+    for label, subs in specs:
+        for sub in subs:
+            p = os.path.join(home, sub)
+            if os.path.isdir(p):
+                out.append({"name": label, "path": p})
+                break
+    # ドライブ直下も出しておく
+    for drive in ("C:\\", "D:\\", "E:\\", "F:\\", "G:\\", "I:\\"):
+        if os.path.isdir(drive):
+            out.append({"name": drive, "path": drive})
+    return out
+
+
+def list_dir(path, dirs_only=False):
+    entries = []
+    for name in os.listdir(path):
+        full = os.path.join(path, name)
+        try:
+            is_dir = os.path.isdir(full)
+        except OSError:
+            continue
+        if is_dir:
+            if name.startswith("$") or name.startswith("."):
+                continue
+            entries.append({"name": name, "is_dir": True})
+        elif not dirs_only:
+            ext = os.path.splitext(name)[1].lower()
+            if ext in VIDEO_EXTS:
+                try:
+                    size = os.path.getsize(full)
+                except OSError:
+                    size = 0
+                entries.append({"name": name, "is_dir": False, "size": size})
+    entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
+    return entries
+
+
+# ------------------------------------------------------------------
 # 変換まわり
 # ------------------------------------------------------------------
 def nvenc_available():
@@ -194,19 +266,6 @@ def nvenc_available():
         except Exception:  # noqa: BLE001
             _nvenc_cache[0] = False
     return _nvenc_cache[0]
-
-
-def load_config():
-    try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def save_config(cfg):
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
 
 
 def probe_file(path):
@@ -239,8 +298,7 @@ def probe_file(path):
 
     duration = float(data.get("format", {}).get("duration", 0) or 0)
 
-    # 回転メタデータ (縦撮り動画)。ffmpegはデコード時に自動回転するので、
-    # UI・クロップ座標は回転後の表示サイズで扱う
+    # 回転メタデータ (縦撮り動画)
     rotation = 0
     for sd in video.get("side_data_list", []):
         if "rotation" in sd:
@@ -257,7 +315,6 @@ def probe_file(path):
     vcodec = video.get("codec_name", "")
     acodec = audio.get("codec_name", "") if audio else None
 
-    # Windows/iPhoneで再生できるかの簡易判定
     playable_pix = pix_fmt in ("yuv420p", "yuvj420p", "nv12")
     playable_v = vcodec in ("h264", "hevc") and playable_pix
     playable_a = acodec in (None, "aac", "mp3")
@@ -299,7 +356,6 @@ def extract_frame(path, t, width=960):
     ]
     r = run_cmd(args, timeout=60)
     if r.returncode != 0 or not r.stdout:
-        # 末尾フレーム付近で失敗した場合は少し手前を試す
         args[3] = f"{max(0.0, t - 0.5):.3f}"
         r = run_cmd(args, timeout=60)
         if r.returncode != 0 or not r.stdout:
@@ -402,7 +458,6 @@ def convert_worker(job_id):
             last_err = proc.stderr.read().decode("utf-8", "replace")[-800:]
         except Exception as e:  # noqa: BLE001
             last_err = str(e)
-        # NVENC失敗 → x264でリトライ
         if os.path.exists(out):
             try:
                 os.remove(out)
@@ -412,121 +467,6 @@ def convert_worker(job_id):
 
     job["state"] = "error"
     job["error"] = last_err or "変換に失敗しました"
-
-
-# ------------------------------------------------------------------
-# ファイル選択ダイアログ (PowerShell標準ダイアログ。tkinter不使用)
-# ------------------------------------------------------------------
-_FILTER = ("動画ファイル|*.mp4;*.mov;*.m4v;*.avi;*.mkv;*.mts;*.m2ts;*.mxf;*.wmv;*.webm|"
-           "すべてのファイル (*.*)|*.*")
-
-# ダイアログを確実に最前面に出すための前置きスクリプト。
-# TopMostのダミーフォームをオーナーにし、SetForegroundWindow等(P/Invoke)で
-# 複数手段を併用してフォアグラウンド化する。これをオーナーにShowDialogを呼ぶ。
-_PS_PREFIX = r'''[Console]::OutputEncoding=[System.Text.Encoding]::UTF8
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName System.Drawing
-try {
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public class PcFg {
-  [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
-  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
-  [DllImport("user32.dll")] static extern bool AttachThreadInput(uint a, uint b, bool f);
-  [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr h);
-  [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int n);
-  [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int cx, int cy, uint f);
-  [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
-  [DllImport("user32.dll")] static extern void keybd_event(byte v, byte s, uint f, IntPtr e);
-  public static void Force(IntPtr h) {
-    try { keybd_event(0x12,0,0,IntPtr.Zero); keybd_event(0x12,0,2,IntPtr.Zero); } catch {}
-    IntPtr fg = GetForegroundWindow();
-    uint pp; uint ft = GetWindowThreadProcessId(fg, out pp);
-    uint mt = GetCurrentThreadId();
-    AttachThreadInput(mt, ft, true);
-    SetWindowPos(h, new IntPtr(-1), 0, 0, 0, 0, 0x0003);
-    ShowWindow(h, 5);
-    BringWindowToTop(h);
-    SetForegroundWindow(h);
-    AttachThreadInput(mt, ft, false);
-  }
-}
-"@
-} catch {}
-function Show-Front($dlg) {
-  $owner = New-Object System.Windows.Forms.Form
-  $owner.FormBorderStyle = 'None'
-  $owner.ShowInTaskbar = $false
-  $owner.TopMost = $true
-  $owner.Size = New-Object System.Drawing.Size(1,1)
-  $owner.StartPosition = 'Manual'
-  $owner.Location = New-Object System.Drawing.Point(0,0)
-  $owner.Add_Shown({ try { $owner.Activate(); [PcFg]::Force($owner.Handle) } catch {} })
-  $owner.Show()
-  [System.Windows.Forms.Application]::DoEvents()
-  try { [PcFg]::Force($owner.Handle) } catch {}
-  $r = $dlg.ShowDialog($owner)
-  $owner.Close(); $owner.Dispose()
-  return $r
-}
-'''
-
-
-def _run_ps_dialog(ps_body):
-    # PowerShellをSTAで起動しWindows Formsダイアログを開く。
-    # 日本語を確実に扱うため一時.ps1(UTF-8 BOM)に書いて -File で実行、出力もUTF-8。
-    script = _PS_PREFIX + ps_body
-    fd, path = tempfile.mkstemp(suffix=".ps1")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(b"\xef\xbb\xbf")
-            f.write(script.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8"))
-        r = subprocess.run(
-            ["powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File", path],
-            capture_output=True, timeout=600, creationflags=CREATE_NO_WINDOW,
-        )
-        return r.stdout.decode("utf-8", "replace")
-    finally:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
-
-
-def pick_file_dialog():
-    ps = (
-        "$d = New-Object System.Windows.Forms.OpenFileDialog\n"
-        "$d.Title = '動画ファイルを選択'\n"
-        f"$d.Filter = '{_FILTER}'\n"
-        "$r = Show-Front $d\n"
-        "if ($r -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.FileName) }\n"
-    )
-    return _run_ps_dialog(ps).strip()
-
-
-def pick_files_dialog():
-    ps = (
-        "$d = New-Object System.Windows.Forms.OpenFileDialog\n"
-        "$d.Title = '動画ファイルを選択 (複数選択OK)'\n"
-        "$d.Multiselect = $true\n"
-        f"$d.Filter = '{_FILTER}'\n"
-        "$r = Show-Front $d\n"
-        "if ($r -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write(($d.FileNames -join \"`n\")) }\n"
-    )
-    out = _run_ps_dialog(ps).strip()
-    return [p for p in out.split("\n") if p.strip()]
-
-
-def pick_dir_dialog():
-    ps = (
-        "$d = New-Object System.Windows.Forms.FolderBrowserDialog\n"
-        "$d.Description = '出力先フォルダを選択'\n"
-        "$r = Show-Front $d\n"
-        "if ($r -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.SelectedPath) }\n"
-    )
-    return _run_ps_dialog(ps).strip()
 
 
 # ------------------------------------------------------------------
@@ -561,6 +501,37 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        elif route == "/api/browse":
+            mode = q.get("mode", ["files"])[0]
+            path = q.get("path", [""])[0]
+            cfg = load_config()
+            if not path:
+                path = cfg.get("browse_dir") or ""
+            if not path or not os.path.isdir(path):
+                kf = known_folders()
+                path = kf[0]["path"] if kf else os.path.expanduser("~")
+            path = os.path.abspath(path)
+            try:
+                entries = list_dir(path, dirs_only=(mode == "dir"))
+            except OSError as e:  # noqa: BLE001
+                self._json({"error": f"このフォルダは開けません: {e}"}, 400)
+                return
+            cfg["browse_dir"] = path
+            save_config(cfg)
+            parent = os.path.dirname(path)
+            if parent == path:
+                parent = None
+            self._json({
+                "path": path, "parent": parent, "entries": entries,
+                "shortcuts": known_folders(),
+            })
+
+        elif route == "/api/pending":
+            with pending_lock:
+                items = list(pending_files)
+                pending_files.clear()
+            self._json({"paths": items})
 
         elif route == "/api/frame":
             if not ffmpeg_ready():
@@ -627,32 +598,14 @@ class Handler(BaseHTTPRequestHandler):
             start_ffmpeg_download()
             self._json({"ok": True})
 
-        elif route == "/api/pick":
-            try:
-                path = pick_file_dialog()
-                self._json({"path": path})
-            except Exception as e:  # noqa: BLE001
-                self._json({"error": str(e)}, 500)
-
-        elif route == "/api/pick-multi":
-            try:
-                self._json({"paths": pick_files_dialog()})
-            except Exception as e:  # noqa: BLE001
-                self._json({"error": str(e)}, 500)
-
-        elif route == "/api/pick-dir":
-            try:
-                path = pick_dir_dialog()
-                if path:
-                    cfg = load_config()
-                    cfg["out_dir"] = path
-                    save_config(cfg)
-                self._json({"path": path})
-            except Exception as e:  # noqa: BLE001
-                self._json({"error": str(e)}, 500)
+        elif route == "/api/sendto":
+            p = (body.get("path") or "").strip().strip('"')
+            if p and os.path.isfile(p):
+                with pending_lock:
+                    pending_files.append(p)
+            self._json({"ok": True})
 
         elif route == "/api/set-out-dir":
-            # out_dir: null = 元ファイルと同じフォルダ
             cfg = load_config()
             cfg["out_dir"] = body.get("out_dir")
             save_config(cfg)
@@ -721,33 +674,56 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class Server(ThreadingHTTPServer):
-    # WindowsではSO_REUSEADDRだと同一ポートに二重バインドできてしまうため無効化
-    # (これで二重起動時に確実にOSErrorが出る)
+    # 二重起動時に確実にOSErrorが出るようSO_REUSEADDRを無効化
     allow_reuse_address = False
+
+
+def _send_to_running(url, file_args):
+    for fa in file_args:
+        try:
+            data = json.dumps({"path": fa}).encode("utf-8")
+            req = urllib.request.Request(
+                url + "api/sendto", data=data,
+                headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=5).read()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def main():
     url = f"http://127.0.0.1:{PORT}/"
-    # ポートバインドを数秒リトライする。
-    # ・アップデート直後の再起動: 旧プロセスのポート解放待ちを吸収して確実に起動
-    # ・本当に二重起動: 数秒粘っても空かない → 既存インスタンスとみなしブラウザだけ開く
+    # 「送る」で渡されたファイルパス (--で始まるフラグは除外)
+    file_args = [a for a in sys.argv[1:] if not a.startswith("--")]
+
+    # ポートバインド。
+    #   通常起動 / 更新直後の再起動: ポート解放待ちのため長めに粘る(8回)。
+    #   「送る」の2つ目起動: 既存インスタンスを即検出したいので短く(3回)。
+    attempts = 3 if file_args else 8
     server = None
-    for _ in range(8):
+    for _ in range(attempts):
         try:
             server = Server(("127.0.0.1", PORT), Handler)
             break
         except OSError:
-            time.sleep(0.5)
+            time.sleep(0.4)
     if server is None:
+        # 既に起動中: 送られたファイルを実行中インスタンスへ渡してブラウザを開く
+        _send_to_running(url, file_args)
         webbrowser.open(url)
         return
-    # アップデーターが確実にプロセスを特定できるようPIDを記録
+
+    # 自分がサーバー: 「送る」ファイルをpendingへ
+    for fa in file_args:
+        if os.path.isfile(fa):
+            with pending_lock:
+                pending_files.append(fa)
+
     try:
         with open(os.path.join(APP_DIR, "server.pid"), "w", encoding="utf-8") as f:
             f.write(str(os.getpid()))
     except OSError:
         pass
-    # ffmpegが未取得なら起動と同時にダウンロード開始 (UIも進捗を表示する)
+
     if ffmpeg_ready():
         ffmpeg_dl.update(state="ready", percent=100, message="準備完了！")
     else:

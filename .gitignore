@@ -1,0 +1,8 @@
+config.json
+server.pid
+__pycache__/
+*.pyc
+*.log
+python/
+ffmpeg/
+publish_log.txt
