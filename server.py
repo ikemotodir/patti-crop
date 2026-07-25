@@ -5,6 +5,7 @@ PATTI CROP - 動画クロップ&変換アプリ (ポータブル版)
 ファイル選択はブラウザ内で完結（OSダイアログ不使用）。
 ffmpegは同梱せず、初回起動時に自動ダウンロードして ffmpeg/ に常駐させる。
 """
+import base64
 import json
 import os
 import re
@@ -22,8 +23,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 PORT = 8765
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.6.0"
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
+
+# アプリ内自動更新の参照先
+UPDATE_API_URL = "https://api.github.com/repos/ikemotodir/patti-crop/releases/latest"
+UPDATE_ZIP_URL = "https://github.com/ikemotodir/patti-crop/releases/latest/download/patti_crop.zip"
 
 # ffmpegは同梱しない。初回DLで ffmpeg/bin/ に常駐させる
 FFMPEG_DIR = os.path.join(APP_DIR, "ffmpeg")
@@ -55,6 +60,11 @@ _ffmpeg_dl_lock = threading.Lock()
 # 「送る」で渡されたファイル (ブラウザが /api/pending で回収する)
 pending_files = []
 pending_lock = threading.Lock()
+
+# アプリ内自動更新の状態
+update_info = {"available": False, "latest": None}
+update_state = {"state": "idle", "percent": 0, "message": ""}
+_update_lock = threading.Lock()
 
 
 def run_cmd(args, timeout=None):
@@ -199,6 +209,231 @@ def start_ffmpeg_download():
             return  # 既に実行中
         ffmpeg_dl.update(state="downloading", percent=0, message="動画エンジンを準備しています...")
         threading.Thread(target=_ffmpeg_dl_worker, daemon=True).start()
+
+
+# ------------------------------------------------------------------
+# アプリ内自動更新
+# ------------------------------------------------------------------
+def _parse_ver(s):
+    nums = re.findall(r"\d+", str(s or ""))
+    if not nums:
+        return None
+    return tuple(int(x) for x in nums[:3])
+
+
+def _update_zip_url():
+    # repo_url.txt があればそちらを優先 (update.ps1 と同じ挙動)
+    try:
+        p = os.path.join(APP_DIR, "repo_url.txt")
+        with open(p, "r", encoding="utf-8") as f:
+            u = f.read().strip()
+        if u.startswith("http"):
+            return u
+    except OSError:
+        pass
+    return UPDATE_ZIP_URL
+
+
+def _update_check_worker():
+    # ネット未接続やAPI失敗時は何もしない (エラーで邪魔しない)
+    try:
+        req = urllib.request.Request(UPDATE_API_URL, headers={
+            "User-Agent": "PATTI-CROP",
+            "Accept": "application/vnd.github+json",
+        })
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read().decode("utf-8", "replace"))
+        tag = str(data.get("tag_name") or "")
+        latest = _parse_ver(tag)
+        local = _parse_ver(APP_VERSION)
+        if latest and local and latest > local:
+            update_info["latest"] = tag.lstrip("vV")
+            update_info["available"] = True
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _jobs_running():
+    with jobs_lock:
+        return any(j.get("state") == "running" for j in jobs.values())
+
+
+# 更新適用スクリプト。サーバー終了を待って上書きコピーし、アプリを再起動する。
+# config.json / server.pid / ffmpeg は絶対に上書き・削除しない。
+_APPLY_PS = r"""
+param([int]$SrvPid, [string]$Src, [string]$Dst)
+for ($i = 0; $i -lt 60; $i++) {
+    if (-not (Get-Process -Id $SrvPid -ErrorAction SilentlyContinue)) { break }
+    Start-Sleep -Milliseconds 500
+}
+$ff = Join-Path $Dst 'ffmpeg'
+robocopy $Src $Dst /E /R:3 /W:1 /XF config.json server.pid /XD $ff | Out-Null
+try { Remove-Item (Split-Path -Parent $Src) -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+Start-Process 'wscript.exe' -ArgumentList ('"' + (Join-Path $Dst 'PattiCrop.vbs') + '" --no-browser')
+exit 0
+"""
+
+
+def _update_worker():
+    tmp_zip = os.path.join(tempfile.gettempdir(), "patti_crop_appupdate.zip")
+    url = _update_zip_url()
+    update_state.update(state="downloading", percent=0,
+                        message="新しいバージョンをダウンロードしています...")
+    total = _remote_size(url)
+    try:
+        if os.path.exists(tmp_zip):
+            os.remove(tmp_zip)
+    except OSError:
+        pass
+    try:
+        proc = subprocess.Popen(
+            ["curl.exe", "-L", "--ssl-no-revoke", "--fail",
+             "--connect-timeout", "30",
+             "--speed-time", "20", "--speed-limit", "20000",
+             "--retry", "3", "--retry-delay", "3",
+             "-o", tmp_zip, url],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            creationflags=CREATE_NO_WINDOW,
+        )
+    except FileNotFoundError:
+        update_state.update(state="error", percent=0,
+                            message="更新に必要な curl.exe が見つかりませんでした。")
+        return
+    while proc.poll() is None:
+        time.sleep(0.5)
+        try:
+            cur = os.path.getsize(tmp_zip) if os.path.exists(tmp_zip) else 0
+        except OSError:
+            cur = 0
+        if total > 0:
+            update_state["percent"] = min(90, round(cur / total * 90, 1))
+            update_state["message"] = f"新しいバージョンをダウンロード中... {cur // 1000000}MB / {total // 1000000}MB"
+        else:
+            update_state["message"] = f"新しいバージョンをダウンロード中... {cur // 1000000}MB"
+    if proc.returncode != 0 or not os.path.exists(tmp_zip) or os.path.getsize(tmp_zip) < 1000000:
+        update_state.update(state="error", percent=0, message=(
+            "更新のダウンロードに失敗しました。ネット接続を確認して、後でもう一度試してください。"
+        ))
+        return
+
+    update_state.update(percent=92, message="更新を展開しています...")
+    work = os.path.join(tempfile.gettempdir(), "patti_crop_appupdate")
+    try:
+        if os.path.isdir(work):
+            shutil.rmtree(work, ignore_errors=True)
+        os.makedirs(work, exist_ok=True)
+        with zipfile.ZipFile(tmp_zip) as z:
+            z.extractall(work)
+    except Exception:  # noqa: BLE001
+        update_state.update(state="error", percent=0,
+                            message="更新ファイルの展開に失敗しました。後でもう一度試してください。")
+        return
+    try:
+        os.remove(tmp_zip)
+    except OSError:
+        pass
+
+    # server.py を含むフォルダを探す (zip直下 or 1階層下)
+    src = None
+    if os.path.isfile(os.path.join(work, "server.py")):
+        src = work
+    else:
+        for name in os.listdir(work):
+            cand = os.path.join(work, name)
+            if os.path.isfile(os.path.join(cand, "server.py")):
+                src = cand
+                break
+    if not src:
+        update_state.update(state="error", percent=0,
+                            message="更新ファイルの中身を確認できませんでした。")
+        return
+
+    # 適用直前の安全確認: 変換が動き出していたら中止
+    if _jobs_running():
+        update_state.update(state="error", percent=0,
+                            message="変換の実行中は更新できません。変換が終わってからもう一度どうぞ。")
+        return
+
+    update_state.update(percent=96, message="更新を適用して再起動します...")
+    ps1 = os.path.join(work, "apply_update.ps1")
+    try:
+        with open(ps1, "w", encoding="utf-8-sig") as f:
+            f.write(_APPLY_PS)
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-WindowStyle", "Hidden", "-File", ps1,
+             "-SrvPid", str(os.getpid()), "-Src", src, "-Dst", APP_DIR],
+            creationflags=CREATE_NO_WINDOW,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+        )
+    except Exception:  # noqa: BLE001
+        update_state.update(state="error", percent=0,
+                            message="更新の適用を開始できませんでした。")
+        return
+    update_state.update(state="restarting", percent=98,
+                        message="再起動しています... そのままお待ちください")
+    # 応答を返し終えるのを少し待ってからサーバーを終了 (適用スクリプトが引き継ぐ)
+    threading.Timer(1.0, lambda: os._exit(0)).start()
+
+
+def start_update():
+    with _update_lock:
+        if update_state["state"] in ("downloading", "restarting"):
+            return True, ""
+        if _jobs_running():
+            return False, "変換の実行中は更新できません。変換が終わってからもう一度どうぞ。"
+        update_state.update(state="downloading", percent=0, message="準備しています...")
+        threading.Thread(target=_update_worker, daemon=True).start()
+        return True, ""
+
+
+# ------------------------------------------------------------------
+# 起動時セルフチェック (ショートカット・「送る」が無ければ自動作成)
+# ------------------------------------------------------------------
+_SELFCHECK_PS = r"""
+param([string]$AppDir)
+$vbs = Join-Path $AppDir 'PattiCrop.vbs'
+$ico = Join-Path $AppDir 'patti_crop.ico'
+if (-not (Test-Path $vbs)) { exit 0 }
+$ws = New-Object -ComObject WScript.Shell
+$desk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'PATTI CROP.lnk'
+if (-not (Test-Path $desk)) {
+    $sc = $ws.CreateShortcut($desk)
+    $sc.TargetPath = $vbs
+    $sc.WorkingDirectory = $AppDir
+    $sc.IconLocation = $ico
+    $sc.Description = 'PATTI CROP'
+    $sc.Save()
+}
+$sendto = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'Microsoft\Windows\SendTo\PATTI CROP.lnk'
+if (-not (Test-Path $sendto)) {
+    $sc2 = $ws.CreateShortcut($sendto)
+    $sc2.TargetPath = $vbs
+    $sc2.WorkingDirectory = $AppDir
+    $sc2.IconLocation = $ico
+    $sc2.Description = 'PATTI CROP'
+    $sc2.Save()
+}
+exit 0
+"""
+
+
+def _selfcheck_worker():
+    # 失敗してもアプリ動作には影響させない。ウィンドウは一切出さない。
+    try:
+        full = _SELFCHECK_PS.replace(
+            "param([string]$AppDir)",
+            "$AppDir = '" + APP_DIR.replace("'", "''") + "'")
+        enc = base64.b64encode(full.encode("utf-16-le")).decode("ascii")
+        subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-WindowStyle", "Hidden", "-EncodedCommand", enc],
+            capture_output=True, timeout=60,
+            creationflags=CREATE_NO_WINDOW,
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # ------------------------------------------------------------------
@@ -560,6 +795,20 @@ class Handler(BaseHTTPRequestHandler):
                 "out_dir": load_config().get("out_dir"),
             })
 
+        elif route == "/api/update-check":
+            self._json({
+                "available": update_info["available"],
+                "latest": update_info["latest"],
+                "current": APP_VERSION,
+            })
+
+        elif route == "/api/update-progress":
+            self._json({
+                "state": update_state["state"],
+                "percent": update_state["percent"],
+                "message": update_state["message"],
+            })
+
         elif route == "/api/ffmpeg-progress":
             self._json({
                 "state": ffmpeg_dl["state"],
@@ -597,6 +846,13 @@ class Handler(BaseHTTPRequestHandler):
         if route == "/api/ffmpeg-download":
             start_ffmpeg_download()
             self._json({"ok": True})
+
+        elif route == "/api/update-start":
+            ok, err = start_update()
+            if ok:
+                self._json({"ok": True})
+            else:
+                self._json({"error": err}, 409)
 
         elif route == "/api/sendto":
             p = (body.get("path") or "").strip().strip('"')
@@ -728,6 +984,11 @@ def main():
         ffmpeg_dl.update(state="ready", percent=100, message="準備完了！")
     else:
         start_ffmpeg_download()
+
+    # 起動時セルフチェックと更新確認 (どちらも失敗しても静かに通常起動)
+    threading.Thread(target=_selfcheck_worker, daemon=True).start()
+    threading.Thread(target=_update_check_worker, daemon=True).start()
+
     print(f"PATTI CROP v{APP_VERSION} 起動: {url}")
     if "--no-browser" not in sys.argv:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()

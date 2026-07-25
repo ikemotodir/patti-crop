@@ -208,6 +208,31 @@
   }
   .hidden { display: none !important; }
 
+  /* 更新バナー */
+  #updBanner {
+    display: flex; align-items: center; justify-content: center; gap: 14px;
+    flex-wrap: wrap;
+    background: linear-gradient(90deg, rgba(240,165,0,.16), rgba(255,107,53,.16));
+    border-bottom: 1px solid var(--accent);
+    padding: 10px 20px; font-size: 13px;
+  }
+  #updBanner .msg { color: var(--text); }
+  #updBanner .msg b { color: var(--accent); }
+  #updBanner button {
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    color: #14100a; font-weight: 700; border: none; padding: 8px 22px;
+  }
+  #updBanner button:hover { filter: brightness(1.15); color: #14100a; }
+  #updBanner .bar {
+    width: 180px; height: 10px; background: var(--panel2);
+    border: 1px solid var(--border); border-radius: 5px; overflow: hidden;
+  }
+  #updBanner .bar i {
+    display: block; height: 100%; width: 0%;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    transition: width .3s;
+  }
+
   /* ffmpeg初回セットアップ オーバーレイ */
   #ffOverlay {
     position: fixed; inset: 0; z-index: 1000;
@@ -247,6 +272,11 @@
 </style>
 </head>
 <body>
+<div id="updBanner" class="hidden">
+  <span class="msg" id="updMsg"></span>
+  <div class="bar hidden" id="updBar"><i id="updBarInner"></i></div>
+  <button id="updBtn">今すぐ更新</button>
+</div>
 <header>
   <div class="logo">PATTI CROP</div>
   <div class="tagline">動画クロップ &amp; Windows/iPhone対応形式に変換 <span id="verLabel"></span></div>
@@ -402,7 +432,7 @@
   <div class="box">
     <h2>🎬 初回セットアップ</h2>
     <div class="desc">
-      PATTI CROP を使うために、動画の変換エンジン（ffmpeg・約80MB）を<br>
+      PATTI CROP を使うために、動画の変換エンジン（ffmpeg・約170MB）を<br>
       <b>一度だけ</b>ダウンロードします。次回からはこの画面は出ません。<br>
       回線により数分かかることがあります。そのままお待ちください。
     </div>
@@ -484,7 +514,85 @@ async function initApp() {
   // 右クリック「送る」で渡されたファイルを回収 (起動直後 + 定期)
   pollPending();
   setInterval(pollPending, 1500);
+  checkUpdate();
 }
+
+// ---------- アプリ内自動更新 ----------
+let updating = false;
+
+async function checkUpdate() {
+  // 起動直後はサーバー側の確認が終わっていないことがあるので数回だけ聞く
+  for (let i = 0; i < 5; i++) {
+    let r = null;
+    try { r = await fetch("/api/update-check").then(r => r.json()); } catch (e) { return; }
+    if (r && r.available && r.latest) {
+      $("updMsg").innerHTML = `新しいバージョン <b>v${r.latest}</b> があります`;
+      $("updBanner").classList.remove("hidden");
+      return;
+    }
+    await sleep(4000);
+  }
+}
+
+$("updBtn").onclick = async () => {
+  if (converting) { alert("変換の実行中は更新できません。変換が終わってからもう一度どうぞ。"); return; }
+  let r;
+  try {
+    r = await fetch("/api/update-start", { method: "POST", body: "{}" }).then(r => r.json());
+  } catch (e) { return; }
+  if (r.error) { alert(r.error); return; }
+  updating = true;
+  $("updBtn").classList.add("hidden");
+  $("updBar").classList.remove("hidden");
+  $("convertBtn").disabled = true;
+  const oldVer = ($("verLabel").textContent || "").trim();
+  let failCount = 0;
+  const poll = setInterval(async () => {
+    let p = null;
+    try { p = await fetch("/api/update-progress").then(r => r.json()); } catch (e) { p = null; }
+    if (p) {
+      failCount = 0;
+      if (p.state === "idle") {
+        // 再起動後の新サーバーに繋がった (state はリセット済み) → バージョン確認してリロード
+        try {
+          const c = await fetch("/api/caps").then(r => r.json());
+          if (c && c.version && ("v" + c.version) !== oldVer) {
+            clearInterval(poll);
+            location.reload();
+            return;
+          }
+        } catch (e) { /* 次のポーリングで再確認 */ }
+        return;
+      }
+      $("updMsg").textContent = p.message || "更新しています...";
+      $("updBarInner").style.width = (p.percent || 0) + "%";
+      if (p.state === "error") {
+        clearInterval(poll);
+        updating = false;
+        alert(p.message || "更新に失敗しました。");
+        $("updBtn").classList.remove("hidden");
+        $("updBar").classList.add("hidden");
+        $("convertBtn").disabled = false;
+      }
+      return;
+    }
+    // サーバー応答なし = 再起動中。復帰を待ってリロード
+    failCount++;
+    $("updMsg").textContent = "再起動しています... そのままお待ちください";
+    $("updBarInner").style.width = "99%";
+    try {
+      const c = await fetch("/api/caps").then(r => r.json());
+      if (c && c.version && ("v" + c.version) !== oldVer) {
+        clearInterval(poll);
+        location.reload();
+      }
+    } catch (e) { /* まだ再起動中 */ }
+    if (failCount > 90) {  // 約2分待っても戻らない場合はリロードだけ試す
+      clearInterval(poll);
+      location.reload();
+    }
+  }, 1300);
+};
 
 let _pendingBusy = false;
 async function pollPending() {
@@ -874,6 +982,7 @@ function sendCropFor(f) {
 }
 
 $("convertBtn").onclick = async () => {
+  if (updating) { $("progressText").textContent = "更新中は変換できないよ（更新が終わるまで待ってね）"; return; }
   const targets = files.filter(f => f.status !== "done");
   if (!targets.length) { $("progressText").textContent = "全ファイル変換済みだよ"; return; }
   converting = true; cancelAll = false;
