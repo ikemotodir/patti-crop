@@ -23,7 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 PORT = 8765
-APP_VERSION = "1.6.0"
+APP_VERSION = "1.6.1"
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 
 # アプリ内自動更新の参照先
@@ -389,7 +389,10 @@ def start_update():
 
 
 # ------------------------------------------------------------------
-# 起動時セルフチェック (ショートカット・「送る」が無ければ自動作成)
+# 起動時セルフチェック
+#   ショートカット・「送る」が無ければ作成。
+#   既にあっても別フォルダの古いアプリを指していれば、今起動したアプリに貼り直す
+#   (zipを別の場所に展開して更新した場合でも、アイコンから最新版が開くようにするため)
 # ------------------------------------------------------------------
 _SELFCHECK_PS = r"""
 param([string]$AppDir)
@@ -397,24 +400,25 @@ $vbs = Join-Path $AppDir 'PattiCrop.vbs'
 $ico = Join-Path $AppDir 'patti_crop.ico'
 if (-not (Test-Path $vbs)) { exit 0 }
 $ws = New-Object -ComObject WScript.Shell
-$desk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'PATTI CROP.lnk'
-if (-not (Test-Path $desk)) {
-    $sc = $ws.CreateShortcut($desk)
-    $sc.TargetPath = $vbs
-    $sc.WorkingDirectory = $AppDir
-    $sc.IconLocation = $ico
-    $sc.Description = 'PATTI CROP'
-    $sc.Save()
+function Set-Link($linkPath) {
+    $needs = $true
+    if (Test-Path $linkPath) {
+        try {
+            $cur = $ws.CreateShortcut($linkPath)
+            if ($cur.TargetPath -eq $vbs) { $needs = $false }
+        } catch { }
+    }
+    if ($needs) {
+        $sc = $ws.CreateShortcut($linkPath)
+        $sc.TargetPath = $vbs
+        $sc.WorkingDirectory = $AppDir
+        $sc.IconLocation = $ico
+        $sc.Description = 'PATTI CROP'
+        $sc.Save()
+    }
 }
-$sendto = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'Microsoft\Windows\SendTo\PATTI CROP.lnk'
-if (-not (Test-Path $sendto)) {
-    $sc2 = $ws.CreateShortcut($sendto)
-    $sc2.TargetPath = $vbs
-    $sc2.WorkingDirectory = $AppDir
-    $sc2.IconLocation = $ico
-    $sc2.Description = 'PATTI CROP'
-    $sc2.Save()
-}
+Set-Link (Join-Path ([Environment]::GetFolderPath('Desktop')) 'PATTI CROP.lnk')
+Set-Link (Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'Microsoft\Windows\SendTo\PATTI CROP.lnk')
 exit 0
 """
 

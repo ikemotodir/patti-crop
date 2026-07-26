@@ -20,7 +20,8 @@ function Die($m) {
 function Build-ReleaseZip($srcDir) {
     Add-Type -AssemblyName System.IO.Compression | Out-Null
     Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null
-    $ex = @('config.json', 'server.pid', 'ffmpeg', '__pycache__', 'publish_log.txt')
+    # .git は利用者に不要（配布zipに入れると肥大化するので必ず除外）
+    $ex = @('config.json', 'server.pid', 'ffmpeg', '__pycache__', 'publish_log.txt', '.git')
     $stageRoot = Join-Path $env:TEMP ('pcz_' + [System.IO.Path]::GetRandomFileName())
     $stage = Join-Path $stageRoot 'src'
     New-Item -ItemType Directory -Force $stage | Out-Null
