@@ -23,7 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 PORT = 8765
-APP_VERSION = "1.6.2"
+APP_VERSION = "1.6.3"
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 
 # アプリ内自動更新の参照先
@@ -261,14 +261,22 @@ def _jobs_running():
 # 更新適用スクリプト。サーバー終了を待って上書きコピーし、アプリを再起動する。
 # config.json / server.pid / ffmpeg は絶対に上書き・削除しない。
 _APPLY_PS = r"""
-param([int]$SrvPid, [string]$Src, [string]$Dst)
+param([int]$SrvPid, [string]$Src, [string]$Dst, [string]$Work)
 for ($i = 0; $i -lt 60; $i++) {
     if (-not (Get-Process -Id $SrvPid -ErrorAction SilentlyContinue)) { break }
     Start-Sleep -Milliseconds 500
 }
 $ff = Join-Path $Dst 'ffmpeg'
 robocopy $Src $Dst /E /R:3 /W:1 /XF config.json server.pid /XD $ff | Out-Null
-try { Remove-Item (Split-Path -Parent $Src) -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+# 後片付けは「更新作業用フォルダそのもの」だけ。
+# (以前は親フォルダを消しており、zip直下にserver.pyがある構成だと
+#  TEMPフォルダ全体を消してしまう不具合があった)
+try {
+    if ($Work -and (Test-Path $Work) -and
+        ((Split-Path -Leaf $Work) -eq 'patti_crop_appupdate')) {
+        Remove-Item $Work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+} catch {}
 Start-Process 'wscript.exe' -ArgumentList ('"' + (Join-Path $Dst 'PattiCrop.vbs') + '" --no-browser')
 exit 0
 """
@@ -362,7 +370,8 @@ def _update_worker():
         subprocess.Popen(
             ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
              "-WindowStyle", "Hidden", "-File", ps1,
-             "-SrvPid", str(os.getpid()), "-Src", src, "-Dst", APP_DIR],
+             "-SrvPid", str(os.getpid()), "-Src", src, "-Dst", APP_DIR,
+             "-Work", work],
             creationflags=CREATE_NO_WINDOW,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
