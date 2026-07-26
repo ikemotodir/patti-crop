@@ -23,7 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 PORT = 8765
-APP_VERSION = "1.6.3"
+APP_VERSION = "1.6.4"
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 
 # アプリ内自動更新の参照先
