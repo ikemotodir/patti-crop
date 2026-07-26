@@ -7,7 +7,16 @@ $log = Join-Path $dir 'publish_log.txt'
 
 function Log($m) {
     $ts = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
-    Add-Content -Path $log -Value ('[' + $ts + '] ' + $m) -Encoding UTF8
+    # ログは補助情報。ウイルス対策ソフト等で一時的にロックされても
+    # 公開処理そのものは止めない (画面表示は必ず出す)
+    $line = '[' + $ts + '] ' + $m
+    foreach ($i in 1..3) {
+        try {
+            $sw = [System.IO.StreamWriter]::new($log, $true, [System.Text.UTF8Encoding]::new($false))
+            $sw.WriteLine($line); $sw.Close()
+            break
+        } catch { Start-Sleep -Milliseconds 120 }
+    }
     Write-Host $m
 }
 function Die($m) {
