@@ -84,8 +84,8 @@
   header .sub { margin-top: 10px; color: var(--text-dim); font-size: .88rem; }
   header .sub a { color: var(--text-dim); text-decoration: underline; }
   .home-link {
-    display: inline-block;
-    margin-top: 20px;
+    display: block;
+    margin-bottom: 16px;
     color: var(--text-dim);
     font-size: .85rem;
     text-decoration: none;
@@ -175,6 +175,10 @@
   details p { color: var(--text-sub); font-size: .92rem; padding: 0 0 14px; }
   details p + p { margin-top: 6px; }
 
+  .sponsor-box { background:linear-gradient(135deg,rgba(214,51,108,.12),rgba(255,196,0,.08)); border:1px dashed var(--pink); border-radius:16px; padding:28px 24px; text-align:center; }
+  .sponsor-box h3 { font-weight:900; font-size:1.2rem; }
+  .sponsor-box p { color:var(--text-sub); font-size:.92rem; max-width:560px; margin:10px auto 18px; }
+
   footer {
     border-top: 1px solid var(--border);
     margin-top: 36px;
@@ -189,6 +193,7 @@
 <body>
 
 <header>
+  <a class="home-link" href="https://ikemotodir.github.io/">← PATTIツールの棚にもどる</a>
   <img class="logo" src="assets/patti_logo.png" alt="PATTI CROP ロゴ">
   <h1>PATTI <span class="accent">CROP</span></h1>
   <p class="tagline">動画をドラッグでクロップして、Windows・iPhoneで<br>再生できるMP4に変換する無料ツール</p>
@@ -196,7 +201,6 @@
      onclick="gtag('event','download',{app:'patti-crop'})">⬇ 無料ダウンロード（Windows）</a>
   <p id="verLine" hidden></p>
   <p class="sub">無料・登録不要・Windows 10/11用 ／ <a href="https://github.com/ikemotodir/patti-crop">ソースコードを見る（GitHub）</a></p>
-  <a class="home-link" href="https://ikemotodir.github.io/">← PATTIツールの棚にもどる</a>
 </header>
 
 <main class="wrap">
@@ -217,7 +221,7 @@
       <li>出てきたフォルダの <code>setup.bat</code> を<b>ダブルクリック</b> → デスクトップにアイコンができて起動します</li>
     </ol>
     <div class="note">
-      <strong>初回だけ</strong>、変換エンジン（約170MB）を自動ダウンロードします。<br>
+      <strong>初回だけ</strong>、変換エンジン（約168MB）を自動ダウンロードします。<br>
       アップデートは<strong>アプリが自動でお知らせ</strong> → ボタン1つで完了。
     </div>
   </section>
@@ -244,7 +248,7 @@
 
     <details><summary>アップデートはどうやる？</summary>
       <p>新しいバージョンが出るとアプリ起動時にお知らせが出ます。「今すぐ更新」を押すだけで適用・再起動まで全自動。設定（出力先など）も変換エンジンも引き継がれるので、待ち時間はほぼありません。</p>
-      <p>zipを取り直したい場合は、上のボタンから最新版をダウンロードして展開し <code>setup.bat</code> を実行すればOK。<b>デスクトップのアイコンは自動で最新版に付け替わる</b>ので、そのままダブルクリックで使えます。（フォルダ内の <code>update.bat</code> でも手動更新できます）</p></details>
+      <p>zipを取り直した場合も、<b>デスクトップのアイコンは自動で最新版に付け替わります</b>。予備としてフォルダ内の <code>update.bat</code> でも手動更新できます。</p></details>
 
     <details><summary>もっとラクに読み込みたい</summary>
       <p>動画を<b>右クリック →「送る」→ PATTI CROP</b> でそのまま読み込めます。アプリ内の「📂 動画を選ぶ」からデスクトップ／ダウンロード／ビデオ／ドキュメントを辿って複数選択することもできます。</p></details>
@@ -260,14 +264,25 @@
       <p>クリエイターを助ける無料ツールを公開する STUDIO PATTI の活動の一環です。ソースはGitHubで公開。スポンサーも<a href="https://ikemotodir.github.io/contact.html" style="color:var(--yellow)" onclick="gtag('event','sponsor_contact_click',{from:'patti-crop'})">募集中</a>。</p></details>
 
     <details><summary>免責事項</summary>
-      <p>本ツールの利用により生じた損害について、STUDIO PATTI（合同会社スタジオパッチ）は責任を負いません。自己責任でご利用ください。</p></details>
+      <p>本ツールの利用により生じた損害について、STUDIO PATTI（合同会社スタジオパッチ）は責任を負いません。権利を持たない動画の変換・再配布はできません。環境により動作しない場合があります。</p></details>
+  </section>
+
+  <!-- スポンサー枠 流用元: PATTI CREATIVE PRODUCT トップ(#sponsor-box)。棚側の仕様変更時に追従 -->
+  <section>
+    <h2>📣 <span class="accent">SPONSOR</span> 📣</h2>
+    <div class="sponsor-box">
+      <h3>法人から個人まで、誰でもスポンサーに</h3>
+      <p>PATTI CREATIVE PRODUCT は、クリエイターが多く集まるサイトです。広告のご相談は直接どうぞ。仲介なし、話が早いのが自慢です。</p>
+      <a class="btn" href="https://ikemotodir.github.io/contact.html"
+         onclick="gtag('event','sponsor_contact_click',{from:'patti-crop'})">広告掲載の相談をする</a>
+    </div>
   </section>
 
 </main>
 
 <footer>
   <p>🎬 PATTI CROP<span id="verFoot"></span></p>
-  <p>© 2026 STUDIO PATTI LLC ── 合同会社スタジオパッチ（愛知県一宮市）</p>
+  <p>© 2026 STUDIO PATTI LLC｜合同会社スタジオパッチ</p>
   <p><a href="https://ikemotodir.github.io/" style="color:var(--yellow)">← PATTI CREATIVE PRODUCT トップへ</a></p>
 </footer>
 
